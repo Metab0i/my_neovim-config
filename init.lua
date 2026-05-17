@@ -32,32 +32,20 @@ vim.opt.showbreak = "↪  "
 vim.o.clipboard = "unnamed"
 
 
+-- Leader keys
+vim.g.mapleader = " "
+vim.g.maplocalleader = "\\"
+
+
 -- Key-bindings
 vim.api.nvim_set_keymap('t', '<Esc>', [[<C-\><C-n>]], { noremap = true, silent = true })
 vim.keymap.set({'n'}, '<C-space>', vim.diagnostic.open_float, { desc = "Open Diagnostics at cursor" })
-vim.keymap.set({'n'}, '<S-Tab>', vim.lsp.buf.hover,	      { desc = "Open Docs at cursor" })
 vim.keymap.set({'i'}, '<C-z>', '<C-o>u',		      { desc = "Undo functionality in insert mode" })
 vim.keymap.set({'i'}, '<C-r>', '<C-o><C-r>',		      { desc = "Redo functionality in insert mode" })
 
 
--- indent-blankline
-require("ibl").setup({
-  indent = {
-    char = "┊",
-  }
-})
-
-
-
-
-
-
--- Winbar and Status Line configs
-if not (vim.bo.filetype == "minimap") then
-  vim.wo.winbar = "%m %F"
-else
-  vim.wo.winbar = ""
-end
+-- Winbar
+vim.wo.winbar = "%m %F"
 
 
 --- Constructs and returns a statusline config
@@ -83,366 +71,199 @@ function setStatusLine ()
     lspc_name = lsp_client.name
   end
 
-  -- GIT info
-  local git_branch = vim.b.gitsigns_status_dict and vim.b.gitsigns_status_dict.head or "-/-"
-  local git_added = vim.b.gitsigns_status_dict and vim.b.gitsigns_status_dict.added or 0
-  local git_changed = vim.b.gitsigns_status_dict and vim.b.gitsigns_status_dict.changed or 0
-  local git_removed = vim.b.gitsigns_status_dict and vim.b.gitsigns_status_dict.removed or 0
-
-  return "⎇ :"..git_branch.." +:"..git_added.." ~:"..git_changed.." -:"..git_removed.." | Err:"..count.ERR.." Warn:"..count.WARN.."  %= %y:"..lspc_name.." | %p%%"
+  return "Err:"..count.ERR.." Warn:"..count.WARN.."  %= %y:"..lspc_name.." | %p%%"
 end
 
-vim.o.laststatus = 3;
+vim.o.laststatus = 3
 
-vim.api.nvim_create_autocmd({'LspAttach', 'DiagnosticChanged', 'WinEnter', 'BufEnter'}, {
+vim.api.nvim_create_autocmd({'DiagnosticChanged', 'WinEnter', 'BufEnter'}, {
   callback = function(_ev)
-    vim.o.statusline = " ";
+    vim.wo.statusline = setStatusLine()
+  end
+})
 
-    -- to make sure that statusline doesn't render for overview minimap
-    if vim.bo.filetype == "minimap" then
-	vim.wo.statusline = "";
-    else
-	vim.wo.statusline = setStatusLine();
+
+-- LSP
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'c',
+  callback = function()
+    vim.lsp.start({
+      name = 'clangd',
+      cmd = { 'clangd', '--background-index', '--clang-tidy' },
+      root_dir = vim.fs.dirname(vim.fs.find({ 'compile_commands.json', '.git' }, { upward = true })[1]) or vim.loop.cwd(),
+    })
+  end,
+})
+
+vim.keymap.set('n', 'gd', vim.lsp.buf.definition, { desc = "Go to definition" })
+vim.keymap.set('n', 'gr', vim.lsp.buf.references, { desc = "Go to references" })
+vim.keymap.set('n', '<leader>rn', vim.lsp.buf.rename, { desc = "Rename symbol" })
+vim.keymap.set('n', '<leader>ca', vim.lsp.buf.code_action, { desc = "Code action" })
+vim.keymap.set('n', 'K', vim.lsp.buf.hover, { desc = "Hover docs" })
+vim.keymap.set('n', '<S-Tab>', vim.lsp.buf.hover, { desc = "Open Docs at cursor" })
+
+
+-- Peek Definition (vanilla, no plugins)
+
+local peek_win_id = nil
+local peek_buf_id = nil
+local peek_augroup = nil
+
+--- Extracts the full function body from a file given the start line
+--- @param filepath string
+--- @param start_line number (1-indexed, the line of the definition)
+--- @return string[]
+local function extract_function_body(filepath, start_line)
+  local file = io.open(filepath, "r")
+  if not file then return {} end
+
+  local lines = {}
+  for line in file:lines() do
+    table.insert(lines, line)
+  end
+  file:close()
+
+  if start_line < 1 or start_line > #lines then return {} end
+
+  -- Scan backwards from start_line to find the opening '{' of the function body
+  local body_start = start_line
+  for i = start_line, 1, -1 do
+    if string.find(lines[i], "{") then
+      body_start = i
+      break
     end
   end
-})
 
-
-
-
-
-
-
-
-
-
-
--- Lazy.nvim
-
--- Bootstrap lazy.nvim
-local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
-if not (vim.uv or vim.loop).fs_stat(lazypath) then
-  local lazyrepo = "https://github.com/folke/lazy.nvim.git"
-  local out = vim.fn.system({ "git", "clone", "--filter=blob:none", "--branch=stable", lazyrepo, lazypath })
-  if vim.v.shell_error ~= 0 then
-    vim.api.nvim_echo({
-      { "Failed to clone lazy.nvim:\n", "ErrorMsg" },
-      { out, "WarningMsg" },
-      { "\nPress any key to exit..." },
-    }, true, {})
-    vim.fn.getchar()
-    os.exit(1)
+  -- Count braces from body_start to find matching '}'
+  local depth = 0
+  local body_end = body_start
+  for i = body_start, #lines do
+    for c in string.gmatch(lines[i], ".") do
+      if c == "{" then depth = depth + 1 end
+      if c == "}" then depth = depth - 1 end
+    end
+    if depth == 0 then
+      body_end = i
+      break
+    end
   end
+
+  -- Extract the function body
+  local result = {}
+  for i = body_start, body_end do
+    table.insert(result, lines[i])
+  end
+  return result
 end
-vim.opt.rtp:prepend(lazypath)
 
--- Make sure to setup `mapleader` and `maplocalleader` before
--- loading lazy.nvim so that mappings are correct.
--- This is also a good place to setup other settings (vim.opt)
-vim.g.mapleader = " "
-vim.g.maplocalleader = "\\"
+--- Opens a floating window showing the definition of the symbol under cursor
+function peek_definition()
+  -- Check if LSP client is attached
+  local clients = vim.lsp.get_clients({ bufnr = 0 })
+  if #clients == 0 then
+    vim.notify("No LSP server attached", vim.log.levels.WARN)
+    return
+  end
 
--- Plugins List & Lazy.nvim Set-up
-require("lazy").setup({
-  spec = {
-    {
-      "hrsh7th/nvim-cmp",
-      event = "InsertEnter",
-      dependencies = {
-	"hrsh7th/cmp-nvim-lsp",
-	"hrsh7th/cmp-buffer",
-	"hrsh7th/vim-vsnip",
-	"hrsh7th/cmp-vsnip",
-	"hrsh7th/cmp-path",
-	"hrsh7th/cmp-cmdline",
-	"neovim/nvim-lspconfig",
-      }
-    },
-    {
-      "lewis6991/gitsigns.nvim",
-      opts = {}
-    },
-    {
-    'nvim-telescope/telescope.nvim',
-     branch = "0.1.x",
-     dependencies = { 
-       'nvim-lua/plenary.nvim'
-     }
-    },
-    {
-      "nvim-treesitter/nvim-treesitter",
-      branch = 'master',
-      lazy = false,
-      build = ":TSUpdate"
-    },
-    {
-      "lukas-reineke/indent-blankline.nvim",
-      main = "ibl",
-      ---@module "ibl"
-      ---@type ibl.config
-      opts = {},
-    },
-    {
-      "wfxr/minimap.vim",
-      init = function ()
-	vim.g.minimap_auto_start = 1
-	vim.g.minimap_git_colors = 1
-	vim.g.minimap_width = 11
+  -- Close any existing peek window
+  if peek_win_id and vim.api.nvim_win_is_valid(peek_win_id) then
+    vim.api.nvim_win_close(peek_win_id, true)
+    peek_win_id = nil
+  end
+  if peek_buf_id and vim.api.nvim_buf_is_valid(peek_buf_id) then
+    vim.api.nvim_buf_delete(peek_buf_id, { force = true })
+    peek_buf_id = nil
+  end
+
+  -- Request definition from LSP
+  local params = vim.lsp.util.make_position_params()
+  vim.lsp.buf_request(0, "textDocument/definition", params, function(err, result, ctx, config)
+    if err then
+      vim.notify("LSP error: " .. err.message, vim.log.levels.ERROR)
+      return
+    end
+
+    if not result or #result == 0 then
+      vim.notify("Definition not found", vim.log.levels.INFO)
+      return
+    end
+
+    -- Get the first definition location
+    local loc = result[1]
+    local uri = loc.uri or loc.targetUri
+    local range = loc.range or loc.targetRange
+    local filepath = vim.uri_to_fname(uri)
+    local def_line = range.start.line + 1 -- Convert to 1-indexed
+
+    -- Extract the function body
+    local body_lines = extract_function_body(filepath, def_line)
+    if #body_lines == 0 then
+      vim.notify("Could not read definition", vim.log.levels.WARN)
+      return
+    end
+
+    -- Create scratch buffer
+    peek_buf_id = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(peek_buf_id, 0, -1, false, body_lines)
+    vim.api.nvim_buf_set_option(peek_buf_id, "modifiable", false)
+    vim.api.nvim_buf_set_option(peek_buf_id, "buftype", "nofile")
+    vim.api.nvim_buf_set_option(peek_buf_id, "filetype", "c")
+
+    -- Calculate window dimensions
+    local max_width = 80
+    local max_height = 20
+    local width = max_width
+    local height = math.min(#body_lines, max_height)
+
+    -- Position window near cursor
+    local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+    local win_height = vim.api.nvim_win_get_height(0)
+    local row = cursor_row + 1
+    if row + height > win_height then
+      row = math.max(1, cursor_row - height - 1)
+    end
+
+    local col = vim.api.nvim_win_get_cursor(0)[2]
+    local win_width = vim.api.nvim_win_get_width(0)
+    if col + width > win_width then
+      col = math.max(0, win_width - width)
+    end
+
+    -- Open floating window
+    peek_win_id = vim.api.nvim_open_win(peek_buf_id, false, {
+      relative = "win",
+      row = row,
+      col = col,
+      width = width,
+      height = height,
+      style = "minimal",
+      border = "rounded",
+      focusable = false,
+      noautocmd = true,
+    })
+
+    -- Set up auto-close on cursor move
+    if peek_augroup then
+      vim.api.nvim_del_augroup_by_name(peek_augroup)
+    end
+    peek_augroup = "PeekDefinitionAutoClose"
+    vim.api.nvim_create_augroup(peek_augroup, { clear = true })
+    vim.api.nvim_create_autocmd("CursorMoved", {
+      group = peek_augroup,
+      callback = function()
+        if peek_win_id and vim.api.nvim_win_is_valid(peek_win_id) then
+          vim.api.nvim_win_close(peek_win_id, true)
+          peek_win_id = nil
+        end
+        if peek_buf_id and vim.api.nvim_buf_is_valid(peek_buf_id) then
+          vim.api.nvim_buf_delete(peek_buf_id, { force = true })
+          peek_buf_id = nil
+        end
+        vim.api.nvim_del_augroup_by_name(peek_augroup)
+        peek_augroup = nil
       end,
-    }
-  },
-
-
-  -- colorscheme that will be used when installing plugins.
-  install = { colorscheme = { "habamax" } },
-  -- automatically check for plugin updates
-  checker = { enabled = true },
-})
-
-
-
-
-
-
-
-
-
-
--- git and gitsigns
---  :Gitsigns diffthis
-vim.opt.fillchars:append({ diff = '░'})
-require('gitsigns').setup {
-  signs = {
-    add          = { text = '+' },
-    change       = { text = '~' },
-    delete       = { text = '_' },
-    topdelete    = { text = '‾' },
-    changedelete = { text = '┃' },
-    untracked    = { text = '┆' },
-  },
-  signs_staged = {
-    add          = { text = '+' },
-    change       = { text = '~' },
-    delete       = { text = '_' },
-    topdelete    = { text = '‾' },
-    changedelete = { text = '┃' },
-    untracked    = { text = '┆' },
-  },
-  signs_staged_enable = true,
-  signcolumn = true,  -- Toggle with `:Gitsigns toggle_signs`
-  numhl      = false, -- Toggle with `:Gitsigns toggle_numhl`
-  linehl     = false, -- Toggle with `:Gitsigns toggle_linehl`
-  word_diff  = false, -- Toggle with `:Gitsigns toggle_word_diff`
-  watch_gitdir = {
-    follow_files = true
-  },
-  auto_attach = true,
-  attach_to_untracked = false,
-  current_line_blame = false, -- Toggle with `:Gitsigns toggle_current_line_blame`
-  current_line_blame_opts = {
-    virt_text = true,
-    virt_text_pos = 'eol', -- 'eol' | 'overlay' | 'right_align'
-    delay = 1000,
-    ignore_whitespace = false,
-    virt_text_priority = 100,
-    use_focus = true,
-  },
-  current_line_blame_formatter = '<author>, <author_time:%R> - <summary>',
-  sign_priority = 6,
-  update_debounce = 100,
-  status_formatter = nil, -- Use default
-  max_file_length = 40000, -- Disable if file is longer than this (in lines)
-  preview_config = {
-    -- Options passed to nvim_open_win
-    style = 'minimal',
-    relative = 'cursor',
-    row = 0,
-    col = 1
-  },
-}
-
-
-
-
-
-
-
-
-
-
-
--- nvim-cmp
-local cmp = require'cmp'
-
-cmp.setup({
-  snippet = {
-    -- REQUIRED - you must specify a snippet engine
-    expand = function(args)
-      vim.fn["vsnip#anonymous"](args.body)
-    end,
-  },
-
-  window = {
-    completion = cmp.config.window.bordered(),
-    documentation = cmp.config.window.bordered(),
-  },
-
-  view = {
-    entries = 'custom',
-  },
-
-
-  mapping = {
-    ['<C-b>'] = cmp.mapping(function(fallback)
-      cmp.scroll_docs(-4)
-    end, { "i" }),
-
-    ['<C-f>'] = cmp.mapping(function(fallback)
-      cmp.scroll_docs(4)
-    end, { "i" }),
-
-    ['<C-Space>'] = cmp.mapping(function(fallback)
-      cmp.complete()
-    end, { "i" }),
-
-    ['<C-e>'] = cmp.mapping(function(fallback)
-      cmp.abort()
-    end, { "i" }),
-
-    ['<CR>'] = cmp.mapping(function(fallback)
-      if cmp.visible() then
-	cmp.confirm({ select = true })
-      else
-	fallback()
-      end
-    end, { "i", "s" }),
-
-    ['<Tab>'] = cmp.mapping(function(fallback)
-      if cmp.visible() then
-	cmp.select_next_item()
-      else
-	fallback()
-      end
-    end, { "i" }),
-
-    ['<S-Tab>'] = cmp.mapping(function(fallback)
-      if cmp.visible() then
-	cmp.select_prev_item()
-      else
-	fallback()
-      end
-    end, {"i"}),
-  },
-
-  sources = cmp.config.sources(
-  {
-    { name = 'nvim_lsp', priority = 1000 },
-    { name = 'vsnip', priority = 900 },
-  },
-
-  {
-    { name = 'buffer', priority = 50 },
-  })
-})
-
--- Use buffer source for `/` and `?` (if you enabled `native_menu`, this won't work anymore).
-cmp.setup.cmdline({ '/', '?' }, {
-  mapping = cmp.mapping.preset.cmdline(),
-  sources = {
-    { name = 'buffer' }
-  }
-})
-
--- Use cmdline & path source for ':' (if you enabled `native_menu`, this won't work anymore).
-cmp.setup.cmdline(':', {
-  mapping = cmp.mapping.preset.cmdline(),
-
-  sources = cmp.config.sources(
-  {
-    { name = 'path' }
-  },
-  {
-    { name = 'cmdline' }
-  }),
-})
-
-
-
-
-
-
-
-
-
-
-
-
-
-
--- LSP server Set-up
--- https://github.com/neovim/nvim-lspconfig/blob/master/doc/configs.md#lsp-configs
-
-vim.lsp.enable('clangd') -- sudo apt-get install clangd
-vim.lsp.enable('lua_ls') -- https://github.com/LuaLS/lua-language-server/releases 
-vim.lsp.enable('ts_ls')  -- https://github.com/typescript-language-server/typescript-language-server
-vim.lsp.enable('bashls') -- https://github.com/bash-lsp/bash-language-server
-
-local capabilities = require('cmp_nvim_lsp').default_capabilities()
-
-vim.lsp.config['clangd'] = {
-  cmd = {'clangd', '--background-index', '--clang-tidy', '--log=verbose'},
-  capabilities = capabilities,
-}
-
-vim.lsp.config['ts_ls'] = {
-  capabilities = capabilities,
-}
-
-vim.lsp.config['lua_ls'] = {
-  settings = {
-    Lua = {
-      completion = {
-        callSnippet = "Replace",
-      },
-      diagnostics = {
-        globals = { "vim" },
-      },
-      workspace = {
-        library = vim.api.nvim_get_runtime_file("", true),
-        checkThirdParty = false,
-      },
-      telemetry = { enable = false },
-    },
-  },
-  capabilities = capabilities,
-}
-
-vim.lsp.config['bashls'] = {
-  capabilities = capabilities,
-}
-
-
-
-
-
-
-
-
-
--- Telescope Set-up
-local telesccope = require('telescope.builtin')
-vim.keymap.set('n', '<C-p>p', telesccope.live_grep, {desc = "Telescope Live Grep"});
-vim.keymap.set('n', '<C-p>f', telesccope.find_files, {desc = "Telescope Find Files"});
-
-
-
-
-
-
-
-
-
-
-
-
-
+    })
+  end)
+end
+
+vim.keymap.set('n', '<leader>pd', peek_definition, { desc = "Peek definition" })
