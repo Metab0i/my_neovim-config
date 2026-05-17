@@ -1,17 +1,9 @@
---TODO:
---  Better and more reliable way of text-prediction
---    consider getting rid of just plain text buffer, no use really
---
---  Autocompletion
---    automatically close scopes
---    functions, if statements, loops 
---    auto-indentation should be 1 tab
-
 
 -- Line numbering
 vim.o.number = true
 vim.o.relativenumber = true
 vim.o.numberwidth = 1
+
 
 -- Cursor configs
 vim.o.cursorline = true
@@ -23,6 +15,7 @@ vim.opt.guicursor = {
   "r-cr:hor20",
   "v:block-blinkon500"
 }
+
 
 -- Spacing
 vim.o.shiftwidth = 2
@@ -47,7 +40,12 @@ vim.keymap.set({'i'}, '<C-z>', '<C-o>u',		      { desc = "Undo functionality in 
 vim.keymap.set({'i'}, '<C-r>', '<C-o><C-r>',		      { desc = "Redo functionality in insert mode" })
 
 
-
+-- indent-blankline
+require("ibl").setup({
+  indent = {
+    char = "┊",
+  }
+})
 
 
 
@@ -447,9 +445,4 @@ vim.keymap.set('n', '<C-p>f', telesccope.find_files, {desc = "Telescope Find Fil
 
 
 
--- indent-blankline
-require("ibl").setup({
-  indent = {
-    char = "┊",
-  }
-})
+
