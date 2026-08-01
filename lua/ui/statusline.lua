@@ -19,13 +19,18 @@ local function setStatusLine()
     lspc_name = lsp_client.name
   end
 
-  return "Err:" .. count.ERR .. " Warn:" .. count.WARN .. "  %= %y:" .. lspc_name .. " | %p%%"
+  local notice_text = require("core.notice").get()
+  local prefix = notice_text and (" " .. notice_text .. " ") or ""
+  return prefix .. "Err:" .. count.ERR .. " Warn:" .. count.WARN .. "  %= %y:" .. lspc_name .. " | %p%%"
 end
 
-vim.o.laststatus = 3
+_G.StatusLine = setStatusLine
 
-vim.api.nvim_create_autocmd({ 'DiagnosticChanged', 'WinEnter', 'BufEnter' }, {
+vim.o.laststatus = 3
+vim.o.statusline = "%!v:lua.StatusLine()"
+
+vim.api.nvim_create_autocmd({ 'DiagnosticChanged' }, {
   callback = function()
-    vim.wo.statusline = setStatusLine()
+    pcall(vim.cmd, "redrawstatus")
   end,
 })
