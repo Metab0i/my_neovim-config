@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Custom Keybindings
 
 Leader is `<Space>`, local leader is `\`.
@@ -15,3 +16,6 @@ Leader is `<Space>`, local leader is `\`.
 | Insert     | `<C-z>`      | Undo                           | `core/navigation.lua`
 | Insert     | `<C-r>`      | Redo                           | `core/navigation.lua`
 | Terminal   | `<Esc>`      | Exit terminal mode             | `core/navigation.lua`
+=======
+WIP
+>>>>>>> d34e93fea225692b14f27f784a9ba0477101dba6
