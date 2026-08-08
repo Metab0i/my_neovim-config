@@ -4,7 +4,7 @@ vim.keymap.set('n', '<C-space>', function()
   local lnum = vim.api.nvim_win_get_cursor(0)[1]
   local diags = vim.diagnostic.get(0, { lnum = lnum - 1 })
   if #diags == 0 then
-    require("core.notice").set("no diagnostics at cursor", 3000)
+    require("core.notice").set("no diagnostics at cursor")
   else
     vim.diagnostic.open_float()
   end

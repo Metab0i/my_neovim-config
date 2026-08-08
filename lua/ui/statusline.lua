@@ -19,9 +19,7 @@ local function setStatusLine()
     lspc_name = lsp_client.name
   end
 
-  local notice_text = require("core.notice").get()
-  local prefix = notice_text and (" " .. notice_text .. " ") or ""
-  return prefix .. "Err:" .. count.ERR .. " Warn:" .. count.WARN .. "  %= %y:" .. lspc_name .. " | %p%%"
+  return "Err:" .. count.ERR .. "  Warn:" .. count.WARN .. "  %= %y:" .. lspc_name .. " | %p%%"
 end
 
 _G.StatusLine = setStatusLine

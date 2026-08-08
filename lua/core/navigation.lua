@@ -26,9 +26,8 @@ vim.opt.showbreak = "  "
 -- Other
 vim.o.clipboard = "unnamed"
 
--- Leader keys
+-- Leader key
 vim.g.mapleader = " "
-vim.g.maplocalleader = "\\"
 
 -- Key-bindings
 vim.api.nvim_set_keymap('t', '<Esc>', [[<C-\><C-n>]], { noremap = true, silent = true })
