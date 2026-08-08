@@ -7,6 +7,7 @@ function M.setup()
 
   require("mason").setup()
   require("mason-lspconfig").setup({
+    ensure_installed = { "clangd", "ts_ls", "html", "pyright" },
     automatic_enable = true,
   })
 end
