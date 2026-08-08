@@ -1,7 +1,9 @@
 # Neovim Config
 
-A plugin-free, hand-rolled Lua Neovim configuration. No plugin manager, no
-external dependencies — everything is built from Neovim's built-in API.
+A hand-rolled Lua Neovim configuration with no plugin manager. Everything is
+built from Neovim's built-in API, with one narrow exception: LSP server
+installation and management is delegated to mason.nvim + mason-lspconfig.nvim
++ nvim-lspconfig (added as git submodules under `pack/mason/start/`).
 
 ## Editor Settings
 
@@ -17,20 +19,48 @@ external dependencies — everything is built from Neovim's built-in API.
 
 ## LSP
 
-Config-driven server setup via `core/lsp_servers.lua`. Servers are defined in a
-table and started automatically on `FileType` based on root markers.
+LSP servers are installed and managed by
+[mason.nvim](https://github.com/mason-org/mason.nvim) +
+[mason-lspconfig.nvim](https://github.com/mason-org/mason-lspconfig.nvim),
+backed by [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig) server
+configs. Setup lives in `lua/core/mason.lua`. The three plugins are git
+submodules under `pack/mason/start/` and auto-load via Neovim's native
+[`:help packages`](https://neovim.io/doc/user/repeat.html#packages) (no plugin
+manager).
 
-Currently configured: **clangd** for C (with `--background-index --clang-tidy`),
-root-detected via `compile_commands.json` or `.git`.
+`automatic_enable = true` (the mason-lspconfig default): any server installed
+through Mason is auto-enabled via `vim.lsp.enable()`. This only applies to
+Mason-installed servers — servers present only on the system PATH (e.g. from
+NixOS) are not recognized and won't be enabled, so install every server you
+want via Mason.
 
-To add a server for a new filetype:
+### Installing / managing servers
+
+| Command             | Action                                        |
+|---------------------|-----------------------------------------------|
+| `:LspInstall <srv>` | Install server `<srv>` (nvim-lspconfig name)  |
+| `:LspInstall`       | Prompt with servers for the current filetype  |
+| `:LspUninstall <s>` | Uninstall a server                            |
+| `:Mason`            | Graphical package status / management UI      |
+| `:MasonUpdate`      | Update managed registries                     |
+
+### Per-server config overrides
+
+nvim-lspconfig ships sensible defaults (filetypes, root markers, capabilities,
+offset encoding). To override for a specific server, call `vim.lsp.config` in
+`lua/core/mason.lua` before the `setup()` calls:
 
 ```lua
-require("core.lsp_servers").add("rust", {
-  name = "rust-analyzer",
-  cmd = { "rust-analyzer" },
-  root_markers = { "Cargo.toml" },
+vim.lsp.config("lua_ls", {
+  settings = { Lua = { diagnostics = { globals = { "vim" } } } },
 })
+```
+
+### Updating the plugins themselves
+
+```bash
+git submodule update --remote pack/mason/start/*
+git add pack/mason/start && git commit  # pin the new SHAs
 ```
 
 All LSP floating windows (hover, diagnostics, signature help) use rounded
@@ -113,9 +143,10 @@ init.lua                   — entry point, requires all modules
 lua/core/navigation.lua    — editor settings, leader key, general keymaps
 lua/core/navhistory.lua    — back/forward cursor position history
 lua/core/notice.lua        — transient popup notifications
-lua/core/lsp_servers.lua   — config-driven LSP server setup
+lua/core/mason.lua         — mason + lspconfig LSP server management
 lua/lsp/init.lua           — LSP keymaps, hover border, diagnostics
 lua/peek.lua               — peek definition toggle
 lua/ui/winbar.lua          — winbar (modified flag + full path)
 lua/ui/statusline.lua      — statusline (diagnostics + LSP + percentage)
+pack/mason/start/*         — mason.nvim, mason-lspconfig.nvim, nvim-lspconfig (git submodules)
 ```
