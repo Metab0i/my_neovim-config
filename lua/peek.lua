@@ -1,77 +1,94 @@
-local peek_win_id = nil
-local peek_buf_id = nil
+local M = {}
+
+local peek_win = nil
+local peek_buf = nil
+local peek_filepath = nil
+local peek_def_line = nil
 local peek_augroup = nil
+local peek_state = "closed"
+local peek_prev_win = nil
 
---- Extracts the full function body from a file given the start line
---- @param filepath string
---- @param start_line number (1-indexed, the line of the definition)
---- @return string[]
-local function extract_function_body(filepath, start_line)
-  local file = io.open(filepath, "r")
-  if not file then return {} end
+local CONTEXT_LINES = 12
+local MAX_HEIGHT = 25
 
-  local lines = {}
-  for line in file:lines() do
-    table.insert(lines, line)
+M.peek_row = function(cursor_line, w0, w_last, height)
+  local space_above = cursor_line - w0
+  local space_below = w_last - cursor_line
+  if space_above >= height + 1 then
+    return cursor_line - height - 1
+  elseif space_below >= height + 1 then
+    return cursor_line + 1
+  else
+    return math.max(w0, cursor_line - height - 1)
   end
-  file:close()
-
-  if start_line < 1 or start_line > #lines then return {} end
-
-  local body_start = start_line
-  for i = start_line, 1, -1 do
-    if string.find(lines[i], "{") then
-      body_start = i
-      break
-    end
-  end
-
-  local depth = 0
-  local body_end = body_start
-  for i = body_start, #lines do
-    for c in string.gmatch(lines[i], ".") do
-      if c == "{" then depth = depth + 1 end
-      if c == "}" then depth = depth - 1 end
-    end
-    if depth == 0 then
-      body_end = i
-      break
-    end
-  end
-
-  local result = {}
-  for i = body_start, body_end do
-    table.insert(result, lines[i])
-  end
-  return result
 end
 
---- Opens a floating window showing the definition of the symbol under cursor
-local function peek_definition()
+local close = function()
+  if peek_augroup then
+    pcall(vim.api.nvim_del_augroup_by_name, peek_augroup)
+    peek_augroup = nil
+  end
+  if peek_win and vim.api.nvim_win_is_valid(peek_win) then
+    vim.api.nvim_win_close(peek_win, true)
+  end
+  peek_win = nil
+  if peek_buf and vim.api.nvim_buf_is_valid(peek_buf) then
+    vim.api.nvim_buf_delete(peek_buf, { force = true })
+  end
+  peek_buf = nil
+  peek_filepath = nil
+  peek_def_line = nil
+  peek_state = "closed"
+end
+
+local close_and_return = function()
+  close()
+  if peek_prev_win and vim.api.nvim_win_is_valid(peek_prev_win) then
+    pcall(vim.api.nvim_set_current_win, peek_prev_win)
+  end
+  peek_prev_win = nil
+end
+
+local jump_to_def = function()
+  local fp = peek_filepath
+  local line = peek_def_line
+  close_and_return()
+  if fp then
+    vim.cmd("edit " .. vim.fn.fnameescape(fp))
+    pcall(vim.api.nvim_win_set_cursor, 0, { line, 0 })
+    vim.cmd("normal! zz")
+  end
+end
+
+local focus = function()
+  if peek_win and vim.api.nvim_win_is_valid(peek_win) then
+    peek_prev_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_win(peek_win)
+    vim.keymap.set('n', '<CR>',  jump_to_def,      { buffer = peek_buf, nowait = true })
+    vim.keymap.set('n', 'q',     close_and_return, { buffer = peek_buf, nowait = true })
+    vim.keymap.set('n', '<Esc>', close_and_return, { buffer = peek_buf, nowait = true })
+    peek_state = "focused"
+  end
+end
+
+local open_preview = function()
   local clients = vim.lsp.get_clients({ bufnr = 0 })
   if #clients == 0 then
-    vim.notify("No LSP server attached", vim.log.levels.WARN)
+    require("core.notice").set("No LSP server attached")
     return
   end
 
-  if peek_win_id and vim.api.nvim_win_is_valid(peek_win_id) then
-    vim.api.nvim_win_close(peek_win_id, true)
-    peek_win_id = nil
-  end
-  if peek_buf_id and vim.api.nvim_buf_is_valid(peek_buf_id) then
-    vim.api.nvim_buf_delete(peek_buf_id, { force = true })
-    peek_buf_id = nil
-  end
+  vim.cmd("normal! m'")
 
-  local params = vim.lsp.util.make_position_params()
+  local client = clients[1]
+  local params = vim.lsp.util.make_position_params(0, client.offset_encoding or client.position_encoding or "utf-16")
   vim.lsp.buf_request(0, "textDocument/definition", params, function(err, result)
     if err then
-      vim.notify("LSP error: " .. err.message, vim.log.levels.ERROR)
+      require("core.notice").set("LSP error: " .. err.message)
       return
     end
-
     if not result or #result == 0 then
-      vim.notify("Definition not found", vim.log.levels.INFO)
+      require("core.notice").set("Definition not found")
       return
     end
 
@@ -81,69 +98,97 @@ local function peek_definition()
     local filepath = vim.uri_to_fname(uri)
     local def_line = range.start.line + 1
 
-    local body_lines = extract_function_body(filepath, def_line)
-    if #body_lines == 0 then
-      vim.notify("Could not read definition", vim.log.levels.WARN)
+    local file = io.open(filepath, "r")
+    if not file then
+      require("core.notice").set("Could not read definition file")
       return
     end
+    local lines = {}
+    for line in file:lines() do
+      table.insert(lines, line)
+    end
+    file:close()
 
-    peek_buf_id = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_lines(peek_buf_id, 0, -1, false, body_lines)
-    vim.api.nvim_buf_set_option(peek_buf_id, "modifiable", false)
-    vim.api.nvim_buf_set_option(peek_buf_id, "buftype", "nofile")
-    vim.api.nvim_buf_set_option(peek_buf_id, "filetype", "c")
-
-    local max_width = 80
-    local max_height = 20
-    local width = max_width
-    local height = math.min(#body_lines, max_height)
-
-    local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
-    local win_height = vim.api.nvim_win_get_height(0)
-    local row = cursor_row + 1
-    if row + height > win_height then
-      row = math.max(1, cursor_row - height - 1)
+    local start_line = math.max(1, def_line - CONTEXT_LINES)
+    local end_line = math.min(#lines, def_line + CONTEXT_LINES)
+    local body = {}
+    for i = start_line, end_line do
+      table.insert(body, lines[i])
     end
 
-    local col = vim.api.nvim_win_get_cursor(0)[2]
+    local height = math.min(#body, MAX_HEIGHT)
+
+    local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+    local w0 = vim.fn.line("w0")
+    local w_last = vim.fn.line("w$")
+    local abs_row = M.peek_row(cursor_row, w0, w_last, height)
+    local win_row = math.max(0, abs_row - w0)
+
     local win_width = vim.api.nvim_win_get_width(0)
+    local width = math.min(80, win_width - 2)
+    local col = vim.api.nvim_win_get_cursor(0)[2]
     if col + width > win_width then
       col = math.max(0, win_width - width)
     end
 
-    peek_win_id = vim.api.nvim_open_win(peek_buf_id, false, {
+    peek_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(peek_buf, 0, -1, false, body)
+    vim.api.nvim_buf_set_option(peek_buf, "modifiable", false)
+    vim.api.nvim_buf_set_option(peek_buf, "buftype", "nofile")
+    vim.api.nvim_buf_set_option(peek_buf, "filetype", "c")
+
+    local win_config = {
       relative = "win",
-      row = row,
+      row = win_row,
       col = col,
       width = width,
       height = height,
       style = "minimal",
       border = "rounded",
-      focusable = false,
+      focusable = true,
       noautocmd = true,
-    })
-
-    if peek_augroup then
-      vim.api.nvim_del_augroup_by_name(peek_augroup)
+    }
+    if start_line > 1 then
+      win_config.title = "..."
+      win_config.title_pos = "center"
     end
+    if end_line < #lines then
+      win_config.footer = "..."
+      win_config.footer_pos = "center"
+    end
+
+    peek_win = vim.api.nvim_open_win(peek_buf, false, win_config)
+    peek_filepath = filepath
+    peek_def_line = def_line
+    peek_state = "preview"
+
     peek_augroup = "PeekDefinitionAutoClose"
     vim.api.nvim_create_augroup(peek_augroup, { clear = true })
     vim.api.nvim_create_autocmd("CursorMoved", {
       group = peek_augroup,
       callback = function()
-        if peek_win_id and vim.api.nvim_win_is_valid(peek_win_id) then
-          vim.api.nvim_win_close(peek_win_id, true)
-          peek_win_id = nil
+        if peek_state == "preview"
+          and vim.api.nvim_get_current_win() ~= peek_win then
+          close()
         end
-        if peek_buf_id and vim.api.nvim_buf_is_valid(peek_buf_id) then
-          vim.api.nvim_buf_delete(peek_buf_id, { force = true })
-          peek_buf_id = nil
-        end
-        vim.api.nvim_del_augroup_by_name(peek_augroup)
-        peek_augroup = nil
       end,
     })
   end)
 end
 
-vim.keymap.set('n', '<leader>pd', peek_definition, { desc = "Peek definition" })
+M.peek_definition = function()
+  if peek_state == "closed" then
+    open_preview()
+  elseif peek_state == "preview" then
+    focus()
+  elseif peek_state == "focused" then
+    close_and_return()
+  end
+end
+
+M._close = close
+M._state = function() return peek_state end
+
+vim.keymap.set('n', '<leader>pd', M.peek_definition, { desc = "Peek definition" })
+
+return M

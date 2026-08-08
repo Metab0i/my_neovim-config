@@ -1,5 +1,21 @@
 require("core.lsp_servers").setup()
 
+local preview_original = vim.lsp.util.open_floating_preview
+vim.lsp.util.open_floating_preview = function(lines, filetype, opts)
+  opts = opts or {}
+  if opts.border == nil then opts.border = "rounded" end
+  return preview_original(lines, filetype, opts)
+end
+
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "markdown",
+  callback = function(args)
+    if vim.bo[args.buf].buftype ~= "nofile" then return end
+    vim.keymap.set('n', 'q',     function() pcall(vim.cmd, "close") end, { buffer = args.buf, nowait = true })
+    vim.keymap.set('n', '<Esc>', function() pcall(vim.cmd, "close") end, { buffer = args.buf, nowait = true })
+  end,
+})
+
 vim.keymap.set('n', '<C-space>', function()
   local lnum = vim.api.nvim_win_get_cursor(0)[1]
   local diags = vim.diagnostic.get(0, { lnum = lnum - 1 })
