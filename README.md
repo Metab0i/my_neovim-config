@@ -126,6 +126,64 @@ portable.
 All LSP floating windows (hover, diagnostics, signature help) use rounded
 borders via a wrapper around `vim.lsp.util.open_floating_preview`.
 
+## Programming Languages
+
+Per-language notes for getting full LSP support in a project. The general
+server install / enable lives in ## LSP above; this section covers what each
+language needs *beyond* the default `vim.lsp.enable()` to fully work.
+
+### C/C++
+
+**clangd** (in `ensure_installed`, auto-enabled) handles C, C++,
+Objective-C, and CUDA. On NixOS it runs via nix-ld (see NixOS-specific setup).
+Two things must hold for it to actually function:
+
+**Root detection.** clangd attaches only when it finds a root marker
+(`compile_commands.json`, `compile_flags.txt`, `.clangd`, `.clang-tidy`,
+`.clang-format`, `configure.ac`, or `.git`) by traversing upward from the
+file. Scratch dirs with none of these get no clangd at all. Cheapest fix:
+`git init` the dir, or drop an empty `.clangd` file into it.
+
+**System headers (glibc: `<stdio.h>` etc.).** clangd discovers these by
+querying the compiler driver named in the compile command. With a complete
+`compile_commands.json` this always works (the database names the driver,
+the `--query-driver` glob in `lua/core/mason.lua` allowlists it). Without
+a database clangd falls back to a hardcoded `clang` driver — which NixOS
+doesn't ship by default, so stdlib silently breaks for scratch files.
+Three ways to fix stdlib resolution, strongest first:
+
+| Option | Scope | What |
+|--------|------|------|
+| `compile_commands.json` | per real project | clangd uses your actual compiler + flags. Most accurate; required when flags vary per file. Always fixes stdlib resolution because it names the driver. |
+| Global clangd config (`~/.config/clangd/config.yaml`) | all scratch files | `CompileFlags: { Compiler: gcc }` makes clangd query the existing NixOS gcc → resolves glibc everywhere a database does *not* cover. One-time setup, auto-tracks nixpkgs updates. |
+| Install `clang` (NixOS package) | all scratch files | Gives clangd its native default `clang` driver. Adds LLVM (~hundreds of MB). Alternative to the global config. |
+
+The project and global options coexist: a database wins for files it
+covers; the global config fills the gaps for everything else.
+
+**Generating `compile_commands.json`:**
+- CMake: `set(CMAKE_EXPORT_COMPILE_COMMANDS ON)` (or
+  `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`), then symlink or copy
+  `build/compile_commands.json` to the project root.
+- Make / generic: `bear -- make` (install the `bear` package).
+- Trivial single-file: `compile_flags.txt`, one flag per line
+  (e.g. `-I./include -DDEBUG`), applies to the whole dir.
+
+**The `~/.config/clangd/config.yaml` file** (only needed if you want the
+global-fallback option above). One line of real content:
+
+```yaml
+# Make clangd query the system gcc as its fallback compiler driver.
+# clangd's default fallback driver (clang) is absent on NixOS, so without
+# this clangd cannot discover glibc's system include paths for scratch
+# files with no compile_commands.json — <stdio.h> etc. fail to resolve.
+# gcc is patched by Nix to expose glibc's store path. Relies on the
+# --query-driver glob in lua/core/mason.lua (allowlists
+# /run/current-system/sw/bin/* and /nix/store/*/bin/*).
+CompileFlags:
+  Compiler: gcc
+```
+
 ## Keybindings
 
 ### LSP
