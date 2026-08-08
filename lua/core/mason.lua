@@ -2,7 +2,12 @@ local M = {}
 
 function M.setup()
   vim.lsp.config("clangd", {
-    cmd = { "clangd", "--background-index", "--clang-tidy" },
+    cmd = {
+      "clangd",
+      "--background-index",
+      "--clang-tidy",
+      "--query-driver=/run/current-system/sw/bin/*,/nix/store/*/bin/*",
+    },
   })
 
   require("mason").setup()
