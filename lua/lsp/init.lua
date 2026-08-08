@@ -1,4 +1,4 @@
-require("core.lsp_servers").setup()
+require("core.mason").setup()
 
 local preview_original = vim.lsp.util.open_floating_preview
 vim.lsp.util.open_floating_preview = function(lines, filetype, opts)

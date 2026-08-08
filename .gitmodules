@@ -1,0 +1,9 @@
+[submodule "pack/mason/start/mason.nvim"]
+	path = pack/mason/start/mason.nvim
+	url = https://github.com/mason-org/mason.nvim
+[submodule "pack/mason/start/mason-lspconfig.nvim"]
+	path = pack/mason/start/mason-lspconfig.nvim
+	url = https://github.com/mason-org/mason-lspconfig.nvim
+[submodule "pack/mason/start/nvim-lspconfig"]
+	path = pack/mason/start/nvim-lspconfig
+	url = https://github.com/neovim/nvim-lspconfig
