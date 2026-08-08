@@ -2,7 +2,7 @@
 
 A hand-rolled Lua Neovim configuration with no plugin manager - everything is
 built from Neovim's built-in API, with one narrow exception: LSP server
-installation and management is delegated to mason.nvim + mason-lspconfig.nvim + nvim-lspconfig (added as git submodules under `pack/mason/start/`).
+installation and management is delegated to `mason.nvim` + `mason-lspconfig.nvim` + `nvim-lspconfig` (added as git submodules under `pack/mason/start/*`).
 
 
 ## Keybindings
