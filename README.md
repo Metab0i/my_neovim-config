@@ -63,6 +63,66 @@ git submodule update --remote pack/mason/start/*
 git add pack/mason/start && git commit  # pin the new SHAs
 ```
 
+### NixOS-specific setup
+
+Two NixOS nuances affect this config's LSP setup. Both are handled, but
+documented here so the setup is reproducible and so anyone porting the config
+knows what's NixOS-specific vs. portable.
+
+**1. Precompiled server binaries need `nix-ld`.**
+
+Mason downloads some servers as precompiled generic-Linux binaries (clangd,
+lua_ls, and others like rust-analyzer/gopls if added later). NixOS has no
+`/lib64/ld-linux-x86-64.so.2` dynamic loader and no `/usr/lib` — it ships a
+stub at that path that refuses to run such binaries. Servers run via a Nix
+interpreter (ts_ls, html, pyright → Nix `node`) are unaffected.
+
+The fix is [nix-ld](https://github.com/Mic92/nix-ld), which installs a real
+loader at that path and surfaces Nix store libraries via `NIX_LD_LIBRARY_PATH`.
+Add to `/etc/nixos/configuration.nix` and rebuild (`sudo nixos-rebuild switch`):
+
+```nix
+programs.nix-ld.enable = true;
+programs.nix-ld.libraries = with pkgs; [
+  stdenv.cc.cc.lib   # libstdc++/libgcc_s — clangd/LLVM is C++
+  zlib
+  zstd
+];
+```
+
+If a server later reports a missing `libfoo.so`, add the Nix package providing
+it to `libraries` and rebuild. `:checkhealth mason` lists remaining gaps.
+
+**2. clangd can't find system headers without `--query-driver`.**
+
+clangd discovers system include dirs (glibc's `<stdio.h>`, etc.) by invoking
+the compiler driver named in `compile_commands.json`. Since clangd 12 it
+refuses to run unknown driver paths for security, and its default allowlist is
+`/usr/bin/*` — which doesn't exist on NixOS (compilers live under
+`/run/current-system/sw/bin` → `/nix/store/*/bin`). Without an allowlist,
+clangd falls back to its bundled resource dir, can't resolve libc headers, and
+go-to-definition/peek into the standard library break.
+
+The fix is the `--query-driver` glob in `lua/core/mason.lua` (commented
+in-code). It allowlists the NixOS driver paths so clangd can query the gcc
+wrapper and resolve system headers.
+
+### Running this config on non-NixOS
+
+The config works as-is on conventional Linux/macOS. Nothing *needs* deletion —
+both NixOS-specific items are harmless no-ops elsewhere:
+
+- `--query-driver` — clangd ignores allowlist entries matching no driver; the
+  paths `/run/current-system/sw/bin/*` and `/nix/store/*/bin/*` simply never
+  match on a normal distro. Can be left in, or removed from the clangd `cmd`
+  in `lua/core/mason.lua` for tidiness (also drop the comment above it).
+- `nix-ld` — not a config-repo concern; it's a NixOS system setting. On a
+  normal distro the dynamic loader and `/usr/lib` already exist, so mason's
+  precompiled binaries run without it. No action.
+
+`ensure_installed`, `automatic_enable`, and all server overrides are fully
+portable.
+
 All LSP floating windows (hover, diagnostics, signature help) use rounded
 borders via a wrapper around `vim.lsp.util.open_floating_preview`.
 
