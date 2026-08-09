@@ -1,8 +1,6 @@
 # Neovim Config
 
-A hand-rolled Lua Neovim configuration with no plugin manager - everything is
-built from Neovim's built-in API, with one narrow exception: LSP server
-installation and management is delegated to `mason.nvim` + `mason-lspconfig.nvim` + `nvim-lspconfig` (added as git submodules under `pack/mason/start/*`).
+A hand-rolled Lua Neovim config with no plugin manager, except LSP install/management via `mason.nvim` + `mason-lspconfig.nvim` + `nvim-lspconfig` (git submodules under `pack/mason/start/*`).
 
 
 ## Keybindings
@@ -21,6 +19,28 @@ installation and management is delegated to `mason.nvim` + `mason-lspconfig.nvim
 
 Hover float: first press opens unfocused; second focuses to scroll with
 `j`/`k`/`<C-d>`/`<C-f>`; `q`/`<Esc>` closes.
+
+### Autocomplete
+
+| Mode   | Key          | Action                                  | Source
+|--------|--------------|-----------------------------------------|--------------------------
+| Insert | `<C-Space>`  | Toggle LSP ghost-line autocomplete       | `autocomplete.lua`
+| Insert | `<Tab>`      | Cycle candidate forward (while active)   | `autocomplete.lua`
+| Insert | `<S-Tab>`    | Cycle candidate backward (while active)  | `autocomplete.lua`
+| Insert | `<CR>`       | Accept the shown candidate (while active)| `autocomplete.lua`
+
+Press `<C-Space>` to request `textDocument/completion` from all attached
+servers and show **one** ghost suggestion line below the cursor, filtered to
+items matching the word before the cursor. Empty prefix is allowed only right
+after `.`, `::`, or `->`. `<Tab>`/`<S-Tab>` cycle a lazy 20-wide expanding
+window (cycling past the edge loads another 20, up to everything the LSP
+returned, with wrap-around). `<CR>` inserts only the part of the
+label/`insertText` after the already-typed prefix (snippet placeholders
+`${1:..}`/`$1` stripped) and closes. A second `<C-Space>` cancels. While active,
+typing refilters live and auto-closes when the prefix matches nothing; it also
+closes on line change, `<Esc>`, or leaving the buffer. When inactive, `<Tab>`
+and `<CR>` fall through to their defaults. `isIncomplete` is ignored (single
+fetch). Normal-mode `<C-Space>` (diagnostics) is unaffected.
 
 ### Peek Definition
 
@@ -61,20 +81,19 @@ to another file, `<M-Left>` returns you to the previous file/position.
 | Insert | `<Tab>`/`<S-Tab>`/`<Up>`/`<Down>` | Cycle file suggestion | `core/execution_pannel.lua`
 | Insert | `<Esc>`         | Close panel                     | `core/execution_pannel.lua`
 
-A single-line input spanning the top of the viewport (inset 5 cells left/right)
-opened with `<Space><Space>`. Type to fuzzy-search files in the current file's
-directory (+ its git root) and the CWD `nvim` was launched in (deduped;
-basename-priority ranking); `.git` and `node_modules` are excluded from the
-search, and ripgrep's default `.gitignore` respect applies. `<Enter>` opens the
-highlighted suggestion via `:edit`. `/replace -m <vimregex> -r <replacement>`
-does live in-buffer replacement with extmark preview (match = Search +
-strikethrough, replacement = Substitute inline virt text, current = IncSearch);
-`-r` may be omitted to delete matches. `/replace -help` shows usage; `/?` shows
-a brief info panel. The panel slides to the **bottom** of the viewport (with the
-suggestion dropdown above it) when the top of the file is within a few lines of
-the viewport top — otherwise it docks at the top — so the file's opening lines
-stay visible. The position is re-evaluated on open, on scroll (`WinScrolled`),
-and after each match cycle.
+A single-line input (inset 5 cells left/right) opened with `<Space><Space>`.
+Type to fuzzy-search files in the current file's directory (+ its git root) and
+the CWD `nvim` launched in (deduped; basename-priority ranking); `.git` and
+`node_modules` are excluded, and ripgrep's default `.gitignore` respect applies.
+`<Enter>` opens the highlighted suggestion via `:edit`. `/replace -m <vimregex>
+-r <replacement>` does live in-buffer replacement with extmark preview (match =
+Search + strikethrough, replacement = Substitute inline virt text, current =
+IncSearch); `-r` may be omitted to delete matches. `/replace -help` shows
+usage; `/?` shows a brief info panel. The panel slides to the **bottom** of the
+viewport (dropdown above it) when the top of the file is within a few lines of
+the viewport top (otherwise it docks at the top), so the opening lines stay
+visible. Position is re-evaluated on open, scroll (`WinScrolled`), and after
+each match cycle.
 
 | Mode   | Key     | Action                              | Source
 |--------|---------|-------------------------------------|--------------------------
@@ -114,9 +133,9 @@ borders via a wrapper around `vim.lsp.util.open_floating_preview`.
 
 ## Programming Languages
 
-Per-language notes for getting full LSP support in a project. The general
-server install/enable lives in ## LSP below; this covers what each language
-needs *beyond* the default `vim.lsp.enable()`.
+Per-language notes for getting full LSP support. General server install/enable
+lives in ## LSP below; this covers what each language needs *beyond* the
+default `vim.lsp.enable()`.
 
 ### C/C++
 
@@ -142,8 +161,7 @@ stdlib silently breaks for scratch files. Three fixes, strongest first:
 | Global clangd config (`~/.config/clangd/config.yaml`) | all scratch files | `CompileFlags: { Compiler: gcc }` makes clangd query NixOS gcc -> resolves glibc wherever no database covers. One-time setup, auto-tracks nixpkgs updates. |
 | Install `clang` (NixOS package) | all scratch files | Gives clangd its native default `clang` driver. Adds LLVM (~hundreds of MB). Alternative to the global config. |
 
-Project and global options coexist: a database wins for files it covers; the
-global config fills the gaps.
+A database wins for files it covers; the global config fills the gaps.
 
 **Generating `compile_commands.json`:**
 - CMake: `set(CMAKE_EXPORT_COMPILE_COMMANDS ON)` (or
@@ -172,9 +190,9 @@ backed by [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig) server
 configs. Setup lives in `lua/core/mason.lua`; the three plugins are git
 submodules under `pack/mason/start/` that auto-load via Neovim's native
 [`:help packages`](https://neovim.io/doc/user/repeat.html#packages) (no plugin
-manager). `automatic_enable = true` (default): any Mason-installed server is
-auto-enabled via `vim.lsp.enable()` - install every server you want via Mason,
-since system-installed ones (e.g. from NixOS) are **not** recognized.
+manager). With `automatic_enable = true` (default), Mason-installed servers are
+auto-enabled via `vim.lsp.enable()`. Install every server you want via Mason
+(system-installed ones, e.g. from NixOS, are **not** recognized).
 
 ### Managing servers
 
@@ -258,6 +276,7 @@ lua/core/execution_pannel.lua - execution panel (file search + in-buffer replace
 lua/core/notice.lua        - transient popup notifications
 lua/core/mason.lua         - mason + lspconfig LSP server management
 lua/lsp/init.lua           - LSP keymaps, hover border, diagnostics
+lua/autocomplete.lua       - virtual-line LSP autocomplete (C-Space toggle)
 lua/peek.lua               - peek definition toggle
 lua/ui/winbar.lua          - winbar (modified flag + full path)
 lua/ui/statusline.lua      - statusline (diagnostics + LSP + percentage)
