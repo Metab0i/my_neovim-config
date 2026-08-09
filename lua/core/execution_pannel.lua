@@ -26,18 +26,17 @@ local state = {
   re_obj = nil, re_valid = true,
   matches = {},         -- {row=,col=,end_col=}
   current_idx = 1,
-  shift_ns = nil,       -- namespace for virt_lines shift extmark
-  shift_id = nil,       -- extmark id for the shift
+  panel_at_bottom = false, -- true when the panel is docked at viewport bottom
+  d_height = 1,        -- last set dropdown height (for reposition math)
 }
 
 local ns = nil  -- buffer highlighting namespace (created lazily)
 
 local close_panel_self  -- forward declaration
 
--- Number of empty virtual lines to place above row 0 of the target buffer,
--- pushing file content down below the floating panel so the top of the file
--- stays visible while the panel is open.
-local SHIFT_VLINES = 6
+-- Threshold (in lines from the top of the buffer) below which the panel
+-- docks at the BOTTOM of the viewport so the file top stays visible.
+local SHIFT_NEAR_TOP = 4
 
 ------------------------------------------------------------------ helpers
 
@@ -119,28 +118,6 @@ local function clear_extmarks()
   end
 end
 
-local function clear_shift_extmark()
-  if state.shift_ns and state.target_buf and vim.api.nvim_buf_is_valid(state.target_buf) then
-    vim.api.nvim_buf_clear_namespace(state.target_buf, state.shift_ns, 0, -1)
-  end
-  state.shift_id = nil
-end
-
-local function set_shift_extmark()
-  if not state.target_buf or not vim.api.nvim_buf_is_valid(state.target_buf) then return end
-  if state.shift_ns == nil then
-    state.shift_ns = vim.api.nvim_create_namespace("ExecPannelShift")
-  end
-  clear_shift_extmark()
-  local vl = {}
-  for _ = 1, SHIFT_VLINES do vl[#vl + 1] = {} end
-  state.shift_id = vim.api.nvim_buf_set_extmark(state.target_buf, state.shift_ns, 0, 0, {
-    virt_lines = vl,
-    virt_lines_above = true,
-    priority = 1,
-  })
-end
-
 local function define_hl()
   if ns == nil then ns = vim.api.nvim_create_namespace("ExecPannel") end
   -- ExecPannelMatch: Search attributes + strikethrough
@@ -176,7 +153,42 @@ end
 local function set_dropdown_height(h)
   if not state.d_win or not vim.api.nvim_win_is_valid(state.d_win) then return end
   h = math.max(1, math.min(h, math.max(1, vim.o.lines - 5)))
+  state.d_height = h
   vim.api.nvim_win_set_height(state.d_win, h)
+end
+
+local function reposition_panel()
+  if not state.open then return end
+  if not state.prev_win or not vim.api.nvim_win_is_valid(state.prev_win) then return end
+  local wi = vim.fn.getwininfo(state.prev_win)
+  local topline = (wi and wi[1] and wi[1].topline) or 1
+  local at_bottom = (topline <= SHIFT_NEAR_TOP)
+  if at_bottom == state.panel_at_bottom then return end
+  state.panel_at_bottom = at_bottom
+  local cols = vim.o.columns
+  local pad = 5
+  local width = math.max(3, cols - pad * 2)
+  local in_row, d_row
+  if at_bottom then
+    in_row = vim.o.lines - 3
+    d_row = in_row - (state.d_height + 2) - 1
+    if d_row < 0 then d_row = 0 end
+  else
+    in_row = 0
+    d_row = 3
+  end
+  pcall(vim.api.nvim_win_set_config, state.in_win, {
+    relative = "editor", row = in_row, col = pad,
+    width = width, height = 1,
+    style = "minimal", border = "rounded",
+    focusable = true,
+  })
+  pcall(vim.api.nvim_win_set_config, state.d_win, {
+    relative = "editor", row = d_row, col = pad,
+    width = width, height = state.d_height,
+    style = "minimal", border = "rounded",
+    focusable = false,
+  })
 end
 
 local function render_hint()
@@ -247,9 +259,13 @@ local function list_files(dir)
   if not dir then return files end
   local cmd
   if vim.fn.executable("rg") == 1 then
-    cmd = { "rg", "--files", "--hidden", "--glob", "!.git" }
+    cmd = { "rg", "--files", "--hidden",
+      "--glob", "!.git", "--glob", "!.git/**",
+      "--glob", "!node_modules", "--glob", "!node_modules/**" }
   elseif vim.fn.executable("find") == 1 then
-    cmd = { "find", dir, "-type", "f", "-not", "-path", "*/.git/*" }
+    cmd = { "find", dir, "-type", "f",
+      "-not", "-path", "*/.git/*",
+      "-not", "-path", "*/node_modules/*" }
   else
     return files
   end
@@ -271,14 +287,23 @@ end
 
 local function build_file_list()
   local cwd = vim.fs.normalize(vim.fn.getcwd())
-  local root = vim.fs.root(0, { ".git" })
+  local bufname = vim.api.nvim_buf_get_name(0)
+  local file_dir = (bufname ~= "" and vim.fs.dirname(vim.fs.normalize(bufname))) or nil
+  local git_root = vim.fs.root(0, { ".git" })
+  local seen_dirs = {}
+  local dirs = {}
+  local function add_dir(d)
+    if not d then return end
+    d = vim.fs.normalize(d)
+    if seen_dirs[d] then return end
+    seen_dirs[d] = true
+    table.insert(dirs, d)
+  end
+  add_dir(file_dir)
+  add_dir(git_root)
+  add_dir(cwd)
   local seen = {}
   local list = {}
-  local dirs = {}
-  if root then table.insert(dirs, root) end
-  if not root or cwd ~= vim.fs.normalize(root) then
-    table.insert(dirs, cwd)
-  end
   for _, d in ipairs(dirs) do
     for _, f in ipairs(list_files(d)) do
       if not seen[f] then
@@ -288,11 +313,11 @@ local function build_file_list()
     end
   end
   table.sort(list, function(a, b)
-    local da = display_path(a, root, cwd)
-    local db = display_path(b, root, cwd)
+    local da = display_path(a, file_dir, cwd)
+    local db = display_path(b, file_dir, cwd)
     return da:lower() < db:lower()
   end)
-  return list, root, cwd
+  return list, file_dir, cwd
 end
 
 local function refresh_file(query)
@@ -391,6 +416,7 @@ local function scroll_to_current()
     pcall(vim.api.nvim_win_call, state.prev_win, function()
       vim.cmd("normal! zz")
     end)
+    reposition_panel()
   end
 end
 
@@ -613,7 +639,6 @@ end
 
 function close_panel_self()
   clear_extmarks()
-  clear_shift_extmark()
   if state.augroup then
     pcall(vim.api.nvim_del_augroup_by_name, state.augroup)
     state.augroup = nil
@@ -640,6 +665,7 @@ function close_panel_self()
   state.mode = "file"
   state.help = false
   state.info = false
+  state.panel_at_bottom = false
   state.open = false
   if state.prev_win and vim.api.nvim_win_is_valid(state.prev_win) then
     pcall(vim.api.nvim_set_current_win, state.prev_win)
@@ -715,6 +741,7 @@ local function open_panel()
   state.mode = "file"
   state.help = false
   state.info = false
+  state.panel_at_bottom = false
   state.query = ""
   state.selection = 1
   state.matches = {}
@@ -725,8 +752,6 @@ local function open_panel()
   state.re_valid = true
 
   state.file_list, state.root, state.cwd = build_file_list()
-
-  set_shift_extmark()
 
   local cols = vim.o.columns
   local pad = 5
@@ -771,8 +796,23 @@ local function open_panel()
     buffer = state.in_buf,
     callback = refresh,
   })
+  vim.api.nvim_create_autocmd("WinScrolled", {
+    group = state.augroup,
+    callback = function(ev)
+      if state.open and state.prev_win and tonumber(ev.match) == state.prev_win then
+        reposition_panel()
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = state.augroup,
+    callback = function()
+      if state.open then reposition_panel() end
+    end,
+  })
 
   render_hint()
+  reposition_panel()
   vim.api.nvim_set_current_win(state.in_win)
   vim.cmd("startinsert")
 end

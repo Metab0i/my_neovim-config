@@ -62,15 +62,19 @@ to another file, `<M-Left>` returns you to the previous file/position.
 | Insert | `<Esc>`         | Close panel                     | `core/execution_pannel.lua`
 
 A single-line input spanning the top of the viewport (inset 5 cells left/right)
-opened with `<Space><Space>`. Type to fuzzy-search files in the project root and
-current directory (basename-priority ranking); `<Enter>` opens the highlighted
-suggestion via `:edit`. `/replace -m <vimregex> -r <replacement>` does live
-in-buffer replacement with extmark preview (match = Search + strikethrough,
-replacement = Substitute inline virt text, current = IncSearch); `-r` may be
-omitted to delete matches. `/replace -help` shows usage; `/?` shows a brief
-info panel. The top of the open file stays visible: 6 empty virtual lines are
-placed above row 0 while the panel is open, pushing file content down below
-the floats.
+opened with `<Space><Space>`. Type to fuzzy-search files in the current file's
+directory (+ its git root) and the CWD `nvim` was launched in (deduped;
+basename-priority ranking); `.git` and `node_modules` are excluded from the
+search, and ripgrep's default `.gitignore` respect applies. `<Enter>` opens the
+highlighted suggestion via `:edit`. `/replace -m <vimregex> -r <replacement>`
+does live in-buffer replacement with extmark preview (match = Search +
+strikethrough, replacement = Substitute inline virt text, current = IncSearch);
+`-r` may be omitted to delete matches. `/replace -help` shows usage; `/?` shows
+a brief info panel. The panel slides to the **bottom** of the viewport (with the
+suggestion dropdown above it) when the top of the file is within a few lines of
+the viewport top — otherwise it docks at the top — so the file's opening lines
+stay visible. The position is re-evaluated on open, on scroll (`WinScrolled`),
+and after each match cycle.
 
 | Mode   | Key     | Action                              | Source
 |--------|---------|-------------------------------------|--------------------------
