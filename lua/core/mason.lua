@@ -25,25 +25,6 @@ function M.setup()
     },
   })
 
-  -- jsonls: validate/autocomplete JSON using schemas. The Chrome MV3 manifest
-  -- schema is associated (path-scoped) only with the highlighter-chromium
-  -- extension's manifest.json so other projects' manifest.json files aren't
-  -- mis-validated. vscode-json-languageservice wraps each fileMatch pattern in
-  -- "**/", so the path segment must be a suffix of the resource path.
-  vim.lsp.config("jsonls", {
-    settings = {
-      json = {
-        validate = { enable = true },
-        schemas = {
-          {
-            uri = "https://json.schemastore.org/chrome-manifest.json",
-            fileMatch = { "Code/highlighter-chromium/manifest.json" },
-          },
-        },
-      },
-    },
-  })
-
   require("mason").setup()
   require("mason-lspconfig").setup({
     ensure_installed = { "clangd", "ts_ls", "html", "pyright", "lua_ls", "jsonls" },
