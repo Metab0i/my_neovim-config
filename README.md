@@ -46,6 +46,39 @@ flipping below when no room above (cursor movement closes it); **(2)** focus -
 jump commands), skips floating scratch buffers, and works cross-file - jump
 to another file, `<M-Left>` returns you to the previous file/position.
 
+### Execution Pannel
+
+| Mode   | Key              | Action                          | Source
+|--------|------------------|---------------------------------|--------------------------
+| Normal | `<leader><leader>` | Toggle execution panel       | `core/execution_pannel.lua`
+| Insert | `/?`             | Show info panel                 | `core/execution_pannel.lua`
+| Insert | `/replace -m … -r …` | Live in-buffer replace      | `core/execution_pannel.lua`
+| Insert | `/replace -help` | Show replace usage             | `core/execution_pannel.lua`
+| Insert | `<Enter>`        | Replace current match / open file | `core/execution_pannel.lua`
+| Insert | `<M-Enter>`      | Replace ALL matches             | `core/execution_pannel.lua`
+| Insert | `J` / `K`        | Cycle current match             | `core/execution_pannel.lua`
+| Insert | `<Shift-Up/Down>`| Cycle current match             | `core/execution_pannel.lua`
+| Insert | `<Tab>`/`<S-Tab>`/`<Up>`/`<Down>` | Cycle file suggestion | `core/execution_pannel.lua`
+| Insert | `<Esc>`         | Close panel                     | `core/execution_pannel.lua`
+
+A single-line input spanning the top of the viewport (inset 5 cells left/right)
+opened with `<Space><Space>`. Type to fuzzy-search files in the project root and
+current directory (basename-priority ranking); `<Enter>` opens the highlighted
+suggestion via `:edit`. `/replace -m <vimregex> -r <replacement>` does live
+in-buffer replacement with extmark preview (match = Search + strikethrough,
+replacement = Substitute inline virt text, current = IncSearch); `-r` may be
+omitted to delete matches. `/replace -help` shows usage; `/?` shows a brief
+info panel. The top of the open file stays visible: 6 empty virtual lines are
+placed above row 0 while the panel is open, pushing file content down below
+the floats.
+
+| Mode   | Key     | Action                              | Source
+|--------|---------|-------------------------------------|--------------------------
+| Normal | `<CR>`  | Clear search highlights or next line | `core/navigation.lua`
+
+Forgets the `/` or `?` search pattern (`@/`) when search highlights are active,
+otherwise performs the default `<CR>` (next line).
+
 ### Notifications
 
 Transient popups in the top-right, rounded border, auto-dismiss after 5 s or on
@@ -217,6 +250,7 @@ are harmless no-ops elsewhere:
 init.lua                   - entry point, requires all modules
 lua/core/navigation.lua    - editor settings, leader key, general keymaps
 lua/core/navhistory.lua    - back/forward cursor position history
+lua/core/execution_pannel.lua - execution panel (file search + in-buffer replace)
 lua/core/notice.lua        - transient popup notifications
 lua/core/mason.lua         - mason + lspconfig LSP server management
 lua/lsp/init.lua           - LSP keymaps, hover border, diagnostics

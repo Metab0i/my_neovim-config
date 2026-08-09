@@ -33,3 +33,14 @@ vim.g.mapleader = " "
 vim.api.nvim_set_keymap('t', '<Esc>', [[<C-\><C-n>]], { noremap = true, silent = true })
 vim.keymap.set({'i'}, '<C-z>', '<C-o>u', { desc = "Undo functionality in insert mode" })
 vim.keymap.set({'i'}, '<C-r>', '<C-o><C-r>', { desc = "Redo functionality in insert mode" })
+
+-- Clear search highlights (and forget the pattern) once a / or ? search
+-- has landed on a match via Enter.
+vim.keymap.set('n', '<CR>', function()
+  if vim.v.hlsearch == 1 then
+    vim.fn.setreg('/', '')
+    if vim.o.hlsearch then vim.cmd('nohlsearch') end
+  else
+    vim.cmd('normal! +')
+  end
+end, { desc = "Clear search highlights or go to next line" })
