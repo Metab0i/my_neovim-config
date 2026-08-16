@@ -140,20 +140,16 @@ default `vim.lsp.enable()`.
 ### C/C++
 
 **clangd** (in `ensure_installed`, auto-enabled) handles C, C++,
-Objective-C, and CUDA. Two things must hold for it to function:
-
-**Root detection.** clangd attaches only when it finds a root marker
-(`compile_commands.json`, `compile_flags.txt`, `.clangd`, `.clang-tidy`,
-`.clang-format`, `configure.ac`, or `.git`) by traversing upward. Scratch
-dirs with none get no clangd - `git init` the dir or drop an empty `.clangd`
-file into it.
+Objective-C, and CUDA.
 
 **System headers (glibc: `<stdio.h>` etc.).** clangd queries the compiler
 driver named in the compile command to discover these. With a
 `compile_commands.json` the database names the driver and the `--query-driver`
 glob in `lua/core/mason.lua` allowlists it, so stdlib resolves. Without a
 database clangd falls back to a hardcoded `clang` driver absent on NixOS, so
-stdlib silently breaks for scratch files. Three fixes, strongest first:
+stdlib silently breaks for scratch files. 
+
+Three fixes, strongest first:
 
 | Option | Scope | What |
 |--------|------|------|
