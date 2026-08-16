@@ -3,6 +3,9 @@ local back = {}
 local forward = {}
 local current = nil
 local navigating = false
+local paused = false  -- when true, _record skips so external features (e.g. the
+                     -- execution panel's /fstr live preview) can move the cursor
+                     -- across files without polluting the back/forward ring.
 local MAX = 5
 
 local function pos_equal(a, b)
@@ -28,6 +31,7 @@ local function find_buf(name)
 end
 
 M._record = function()
+  if paused then return end
   if navigating then return end
   if vim.bo.buftype ~= "" then return end
   local new = get_pos()
@@ -92,7 +96,11 @@ M._reset = function()
   forward = {}
   current = nil
   navigating = false
+  paused = false
 end
+
+M.pause = function() paused = true end
+M.resume = function() paused = false end
 
 M._state = function()
   return { back = back, forward = forward, current = current }

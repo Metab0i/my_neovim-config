@@ -66,34 +66,66 @@ flipping below when no room above (cursor movement closes it); **(2)** focus -
 jump commands), skips floating scratch buffers, and works cross-file - jump
 to another file, `<M-Left>` returns you to the previous file/position.
 
-### Execution Pannel
+### Execution Panel
 
 | Mode   | Key              | Action                          | Source
 |--------|------------------|---------------------------------|--------------------------
-| Normal | `<leader><leader>` | Toggle execution panel       | `core/execution_pannel.lua`
-| Insert | `/?`             | Show info panel                 | `core/execution_pannel.lua`
-| Insert | `/replace -m … -r …` | Live in-buffer replace      | `core/execution_pannel.lua`
-| Insert | `/replace -help` | Show replace usage             | `core/execution_pannel.lua`
-| Insert | `<Enter>`        | Replace current match / open file | `core/execution_pannel.lua`
-| Insert | `<M-Enter>`      | Replace ALL matches             | `core/execution_pannel.lua`
-| Insert | `J` / `K`        | Cycle current match             | `core/execution_pannel.lua`
-| Insert | `<Shift-Up/Down>`| Cycle current match             | `core/execution_pannel.lua`
-| Insert | `<Tab>`/`<S-Tab>`/`<Up>`/`<Down>` | Cycle file suggestion | `core/execution_pannel.lua`
-| Insert | `<Esc>`         | Close panel                     | `core/execution_pannel.lua`
+| Normal | `<leader><leader>` | Toggle execution panel       | `core/execution_panel/init.lua`
+| Insert | `/?`             | Show info panel                 | `core/execution_panel/init.lua`
+| Insert | `/fstr <substr>` | Cross-file substring search     | `core/execution_panel/findstring.lua`
+| Insert | `/replace -m … -r …` | Live in-buffer replace      | `core/execution_panel/replace.lua`
+| Insert | `/replace -help` | Show replace usage             | `core/execution_panel/replace.lua`
+| Insert | `/fold` / `/unfold` / `/foldall` / `/unfoldall` + `<Enter>` | Fold/unfold scopes | `core/execution_panel/scopes.lua`
+| Insert | `<Enter>`        | Run scopes cmd (scopes mode) / replace one (replace) / open file (file/fstr) | `…/init.lua`
+| Insert | `<M-Enter>`      | Replace ALL matches             | `core/execution_panel/replace.lua`
+| Insert | `J` / `K`        | Cycle current match (replace)   | `core/execution_panel/replace.lua`
+| Insert | `<Shift-Up/Down>`| Cycle current match (replace) / cycle file (fstr) | `…/init.lua`
+| Insert | `<Tab>`/`<S-Tab>`| Cycle file suggestion (file) / cycle occurrence (fstr) | `…/init.lua`
+| Insert | `<Up>`/`<Down>`  | Cycle file suggestion (file) / cycle file (fstr) | `…/init.lua`
+| Insert | `<Esc>`         | Close panel (restore original file+cursor on `/fstr`) | `…/init.lua`
 
-A single-line input (inset 5 cells left/right) opened with `<Space><Space>`.
-Type to fuzzy-search files in the current file's directory (+ its git root) and
-the CWD `nvim` launched in (deduped; basename-priority ranking); `.git` and
-`node_modules` are excluded, and ripgrep's default `.gitignore` respect applies.
-`<Enter>` opens the highlighted suggestion via `:edit`. `/replace -m <vimregex>
--r <replacement>` does live in-buffer replacement with extmark preview (match =
-Search + strikethrough, replacement = Substitute inline virt text, current =
-IncSearch); `-r` may be omitted to delete matches. `/replace -help` shows
-usage; `/?` shows a brief info panel. The panel slides to the **bottom** of the
-viewport (dropdown above it) when the top of the file is within a few lines of
-the viewport top (otherwise it docks at the top), so the opening lines stay
-visible. Position is re-evaluated on open, scroll (`WinScrolled`), and after
-each match cycle.
+A single-line input (inset 5 cells left/right) opened with `<Space><Space>`, split
+into sibling submodules under `lua/core/execution_panel/`(`init.lua` is the entry:
+shared panel state, window/dropdown infra, mode router, keymap dispatcher):
+
+- **File search** (`findfile.lua`, discovery via `discovery.lua`): typing fuzzy-
+  searches files in the current file's directory (+ its git root) and the CWD
+  `nvim` launched in (deduped; basename-priority ranking); `.git` and
+  `node_modules` are excluded, and ripgrep's default `.gitignore` respect applies.
+  `<Enter>` opens the highlighted suggestion via `:edit`.
+- **`/fstr <literal-substring>`** (`findstring.lua`): case-sensitive cross-file
+  substring search over the same discovery dirs (`.git`/`node_modules` excluded).
+  Shows matching files with the total occurrence count right-aligned on each row,
+  ranked by count desc then path asc. The highlighted file is **previewed live** in
+  the underlying window at its first match, debounced ~150 ms while typing and
+  instant on arrow nav. `<Up>`/`<Down>` cycle files; `<Tab>`/`<S-Tab>` cycle
+  occurrences within the previewed file; `<Enter>` opens the highlighted file and
+  hands the pattern to `@/` (literal, `\V…`) with `hlsearch` so `n`/`N` continue;
+  `<Esc>` restores the original file, cursor and `@/`. Navigation history (`core/
+  navhistory.lua`) is paused during the preview so cycling files doesn't pollute
+  the back/forward ring, then resumed after `<Esc>`/`<Enter>`.
+- **`/replace -m <vimregex> -r <replacement>`** (`replace.lua`): live in-buffer
+  replacement with extmark preview (match = Search + strikethrough, replacement =
+  Substitute inline virt text, current = IncSearch); `-r` may be omitted to delete
+  matches. `/replace -help` shows usage; `/?` shows a brief info panel. `J`/`K` and
+  `<Shift-Up/Down>` cycle the current match; `<Enter>` replaces one, `<M-Enter>`
+  replaces all.
+- **Scope folding** (`scopes.lua`): `/fold`, `/unfold`, `/foldall`, `/unfoldall`
+  fire on `<Enter>` (then the panel closes and focus returns to the file). Scopes
+  come from LSP `textDocument/documentSymbol` (functions, methods, classes,
+  structs, enums, interfaces, namespaces, modules) merged with an indentation
+  heuristic for `if`/`loop`/`switch`/block scopes (pure-indent fallback when no
+  LSP client). Folds use `foldmethod=manual` with `foldtext = "..."`: each scope's
+  **body** is folded while the opener line stays visible, so a folded scope renders
+  as the opener followed by a `...` line. `/fold` folds the innermost scope
+  enclosing the cursor; `/unfold` opens the innermost enclosing fold; `/foldall`
+  collapses every scope; `/unfoldall` clears all folds and restores the prior fold
+  settings. Folds persist after the panel closes.
+
+The panel slides to the **bottom** of the viewport (dropdown above it) when the top
+of the file is within a few lines of the viewport top (otherwise it docks at the
+top), so the opening lines stay visible. Position is re-evaluated on open, scroll
+(`WinScrolled`), and after each match cycle.
 
 | Mode   | Key     | Action                              | Source
 |--------|---------|-------------------------------------|--------------------------
@@ -267,10 +299,16 @@ are harmless no-ops elsewhere:
 ```
 init.lua                   - entry point, requires all modules
 lua/core/navigation.lua    - editor settings, leader key, general keymaps
-lua/core/navhistory.lua    - back/forward cursor position history
-lua/core/execution_pannel.lua - execution panel (file search + in-buffer replace)
+lua/core/navhistory.lua    - back/forward cursor position history (pause/resume for /fstr preview)
 lua/core/notice.lua        - transient popup notifications
 lua/core/mason.lua         - mason + lspconfig LSP server management
+lua/core/execution_panel/  - quick-action panel (`<leader><leader>`)
+  init.lua                 - shared panel state, window/dropdown infra, mode router, keymaps
+  discovery.lua            - rules/logic for file + content (substring) search (no UI)
+  findfile.lua             - fuzzy file-find UI + integration (uses discovery)
+  replace.lua              - in-buffer regex live-replace (logic + UI)
+  findstring.lua           - /fstr cross-file substring search (UI + integration)
+  scopes.lua               - /fold /unfold /foldall /unfoldall scope folding (LSP + indent)
 lua/lsp/init.lua           - LSP keymaps, hover border, diagnostics
 lua/autocomplete.lua       - virtual-line LSP autocomplete (C-Space toggle)
 lua/peek.lua               - peek definition toggle

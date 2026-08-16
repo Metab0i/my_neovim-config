@@ -1,6 +1,6 @@
 require("core.navigation")
 require("core.navhistory")
-require("core.execution_pannel")
+require("core.execution_panel")
 require("ui.winbar")
 require("ui.statusline")
 require("lsp")
