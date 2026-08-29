@@ -56,6 +56,33 @@ local function run(cmd, cwd)
   return obj.stdout
 end
 
+-- parse `rg --count-matches` stdout (one "path:count" line per file) into a list
+-- of { abs = , count = }. Shared by the sync grep_files and grep_files_async so
+-- their parsing is identical (async is just a non-blocking shell dispatch).
+local function parse_rg_counts(out)
+  local list = {}
+  if not out then return list end
+  for line in out:gmatch("[^\r\n]+") do
+    local path, cnt = line:match("^(.-):(%d+)%s*$")
+    if path and cnt then
+      table.insert(list, { abs = vim.fs.normalize(path), count = tonumber(cnt) or 0 })
+    end
+  end
+  return list
+end
+
+-- parse `grep -rIonF` stdout (one "path:rowno:..." line per match) into a
+-- per-file count map { [path] = count }.
+local function parse_grep_counts(out)
+  local counts = {}
+  if not out then return counts end
+  for line in out:gmatch("[^\r\n]+") do
+    local path = line:match("^(.-):%d+:")
+    if path then counts[path] = (counts[path] or 0) + 1 end
+  end
+  return counts
+end
+
 ----------------------------------------------------------------- file discovery
 
 function M.list_files(dir)
@@ -152,29 +179,14 @@ function M.grep_files(pattern, bufnr)
         "--glob", "!.git", "--glob", "!.git/**",
         "--glob", "!node_modules", "--glob", "!node_modules/**",
         "--", pattern, d }
-      local out = run(cmd)
-      if out then
-        for line in out:gmatch("[^\r\n]+") do
-          local path, cnt = line:match("^(.-):(%d+)%s*$")
-          if path and cnt then
-            table.insert(results, { abs = vim.fs.normalize(path), count = tonumber(cnt) or 0 })
-          end
-        end
-      end
+      for _, e in ipairs(parse_rg_counts(run(cmd))) do table.insert(results, e) end
     end
   elseif vim.fn.executable("grep") == 1 then
     for _, d in ipairs(dirs) do
       local cmd = { "grep", "-rIonF",
         "--exclude-dir=.git", "--exclude-dir=node_modules",
         "--", pattern, d }
-      local out = run(cmd)
-      local counts = {}
-      if out then
-        for line in out:gmatch("[^\r\n]+") do
-          local path = line:match("^(.-):%d+:")
-          if path then counts[path] = (counts[path] or 0) + 1 end
-        end
-      end
+      local counts = parse_grep_counts(run(cmd))
       for p, c in pairs(counts) do
         table.insert(results, { abs = vim.fs.normalize(p), count = c })
       end
@@ -243,6 +255,123 @@ function M.line_matches_in_file(bufnr, pattern)
     end
   end
   return out
+end
+
+----------------------------------------------------------------- async content search
+-- Non-blocking versions of grep_files / first_match_in_file, used on the /fstr
+-- per-keystroke typing path so the main loop never blocks on a shell rg scan
+-- (the cause of "characters not caught while typing": a blocking :wait() froze
+-- input until rg returned). Each fires vim.system with an on_exit callback; the
+-- caller passes its own on_done, which the staleness guard in findstring.lua
+-- (a token + state.open check) drops if a newer keystroke superseded this one
+-- or the panel closed. on_exit callbacks are marshalled on the main loop, so the
+-- shared `results` accumulator in grep_files_async is never accessed concurrently.
+-- The sync versions above are retained for the Enter/open one-shot path and tests.
+
+-- Async cross-file literal-substring search. Spawns rg/grep per search dir
+-- concurrently (libuv), accumulates results, and calls on_done(deduped) once
+-- every dir's on_exit has fired. on_done gets the same shape grep_files returns
+-- (list of { abs, count, disp }, unsorted -- the caller sorts).
+function M.grep_files_async(pattern, bufnr, on_done)
+  local results = {}
+  if not on_done then return end
+  if pattern == "" then on_done({}); return end
+  local dirs, file_dir, cwd = M.search_dirs(bufnr)
+  local remaining = #dirs
+  if remaining == 0 then on_done({}); return end
+
+  local function finish_dir()
+    remaining = remaining - 1
+    if remaining == 0 then
+      local seen, dedup = {}, {}
+      for _, r in ipairs(results) do
+        if not seen[r.abs] then
+          seen[r.abs] = true
+          table.insert(dedup, { abs = r.abs, count = r.count,
+            disp = M.display_path(r.abs, file_dir, cwd) })
+        end
+      end
+      -- vim.system's on_exit runs in a FAST event context where most of the API
+      -- (nvim_get_option_value, nvim_win_set_cursor, ...) is forbidden (E5560).
+      -- The caller's on_done touches the UI / window options, so defer it to the
+      -- main loop. vim.schedule is fast-safe to call and is marshalled FIFO, so
+      -- a later (newer) search's on_done queuing after an older one's still lets
+      -- the caller's staleness token guard drop the stale one.
+      vim.schedule(function() on_done(dedup) end)
+    end
+  end
+
+  local has_rg = vim.fn.executable("rg") == 1
+  local has_grep = vim.fn.executable("grep") == 1
+  for _, d in ipairs(dirs) do
+    if has_rg then
+      local cmd = { "rg", "-F", "--count-matches", "--no-heading", "-n",
+        "--glob", "!.git", "--glob", "!.git/**",
+        "--glob", "!node_modules", "--glob", "!node_modules/**",
+        "--", pattern, d }
+      vim.system(cmd, { text = true }, function(obj)
+        if obj and obj.code == 0 and obj.stdout then
+          for _, e in ipairs(parse_rg_counts(obj.stdout)) do table.insert(results, e) end
+        end
+        finish_dir()
+      end)
+    elseif has_grep then
+      local cmd = { "grep", "-rIonF",
+        "--exclude-dir=.git", "--exclude-dir=node_modules",
+        "--", pattern, d }
+      vim.system(cmd, { text = true }, function(obj)
+        if obj and obj.code == 0 and obj.stdout then
+          for p, c in pairs(parse_grep_counts(obj.stdout)) do
+            table.insert(results, { abs = vim.fs.normalize(p), count = c })
+          end
+        end
+        finish_dir()
+      end)
+    else
+      finish_dir()  -- no search tool in this dir; nothing to add
+    end
+  end
+end
+
+-- Async first occurrence of literal `pattern` in file `abs`. Calls
+-- on_done({ row=0based, col=0based_byte, end_col } | nil). Mirrors
+-- first_match_in_file's rg/grep fallback and code==0 requirement.
+function M.first_match_in_file_async(abs, pattern, on_done)
+  if not on_done then return end
+  -- on_done touches the window/cursor API, which is forbidden in the fast
+  -- on_exit context; schedule it onto the main loop (see grep_files_async).
+  local function done(v)
+    vim.schedule(function() on_done(v) end)
+  end
+  if not pattern or pattern == "" or not abs then done(nil); return end
+  if vim.fn.executable("rg") == 1 then
+    local cmd = { "rg", "--column", "-n", "-F", "--no-heading", "-m", "1", "--", pattern, abs }
+    vim.system(cmd, { text = true }, function(obj)
+      if not (obj and obj.code == 0 and obj.stdout) then done(nil); return end
+      local line = obj.stdout:match("([^\r\n]+)")
+      if not line then done(nil); return end
+      local row, col = line:match("^(%d+):(%d+):")
+      if row and col then
+        done({ row = tonumber(row) - 1, col = tonumber(col) - 1,
+          end_col = tonumber(col) - 1 + #pattern })
+      else done(nil) end
+    end)
+  elseif vim.fn.executable("grep") == 1 then
+    local cmd = { "grep", "-nF", "--", pattern, abs }
+    vim.system(cmd, { text = true }, function(obj)
+      if not (obj and obj.code == 0 and obj.stdout) then done(nil); return end
+      local line = obj.stdout:match("([^\r\n]+)")
+      if not line then done(nil); return end
+      local rowstr = line:match("^(%d+):")
+      if not rowstr then done(nil); return end
+      local content = line:sub(#rowstr + 2)
+      local s = content:find(pattern, 1, true)
+      if not s then done(nil); return end
+      done({ row = tonumber(rowstr) - 1, col = s - 1, end_col = s - 1 + #pattern })
+    end)
+  else
+    done(nil)
+  end
 end
 
 return M

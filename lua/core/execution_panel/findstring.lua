@@ -19,7 +19,15 @@ local navhistory = require("core.navhistory")
 
 local M = {}
 local ctx = nil
-local DEBOUNCE_MS = 150
+local DEBOUNCE_MS = 100
+
+-- Per-search staleness token. Bumped in schedule_search on every keystroke and
+-- captured by the async rg callback (local `my = token` at dispatch); the
+-- callback bails if `my ~= token` -- a newer keystroke superseded this search --
+-- or if the panel has closed (`not state().open`). This is the critical guard
+-- that lets the cross-file search run async (vim.system, non-blocking) without
+-- a slow older rg landing over a newer search and rendering stale results.
+local token = 0
 
 function M.init(c) ctx = c end
 
@@ -61,11 +69,40 @@ end
 
 ----------------------------------------------------------------- preview / highlighting
 
+-- literal pattern escaped as a very-nomagic (\V) vim regex, shared by both the
+-- search-register hand-off (set_search_hl) and the window-local preview highlight
+-- (highlight_preview) so they match the exact same ranges.
+local function esc_literal(pattern)
+  return "\\V" .. (pattern:gsub("\\", "\\\\"))
+end
+
+-- hand the pattern to @/ + hlsearch for n/N continuation. Called ONLY on open
+-- (Enter), never while typing: writing @/ during live preview was clobbering the
+-- search register as the user typed and interfering with input capture.
 local function set_search_hl(pattern)
   if pattern == "" then vim.fn.setreg("/", ""); return end
-  local p = "\\V" .. (pattern:gsub("\\", "\\\\"))
-  pcall(vim.fn.setreg, "/", p)
+  pcall(vim.fn.setreg, "/", esc_literal(pattern))
   pcall(function() vim.o.hlsearch = true end)
+end
+
+-- window-local match highlight for the live preview, independent of @/. Tracks
+-- its own match id on state().fstr._match_id and clears via matchdelete (NOT
+-- clearmatches, which would wipe the user's own window-local matches in their
+-- real editing window).
+local function clear_preview_highlight(win)
+  local f = F()
+  if f._match_id then
+    pcall(vim.fn.matchdelete, f._match_id, win)
+    f._match_id = nil
+  end
+end
+
+local function highlight_preview(win, pattern)
+  clear_preview_highlight(win)
+  if pattern and pattern ~= "" then
+    local id = vim.fn.matchadd("ExecPanelMatch", esc_literal(pattern), 10, -1, { window = win })
+    if id and id > 0 then F()._match_id = id end
+  end
 end
 
 local function load_preview(abs, row, col, pattern)
@@ -81,7 +118,7 @@ local function load_preview(abs, row, col, pattern)
   end)
   buf = vim.api.nvim_win_get_buf(win)
   F().preview_abs = abs
-  set_search_hl(pattern)
+  highlight_preview(win, pattern)
   if row ~= nil and col ~= nil then
     pcall(vim.api.nvim_win_set_cursor, win, { row + 1, col })
     pcall(vim.api.nvim_win_call, win, function() vim.cmd("normal! zz") end)
@@ -92,6 +129,7 @@ end
 local function preview_highlighted()
   local s = state()
   local f = F()
+  local my = token
   local res = f.results[f.selection]
   if not res then return end
   local abs = res.abs
@@ -101,11 +139,20 @@ local function preview_highlighted()
   f.match_list = mlist
   if #mlist == 0 then
     f.match_idx = 1
-    local first = discovery.first_match_in_file(abs, f.pattern)
-    if first then
-      pcall(vim.api.nvim_win_set_cursor, s.prev_win, { first.row + 1, first.col })
-      pcall(vim.api.nvim_win_call, s.prev_win, function() vim.cmd("normal! zz") end)
-    end
+    -- the in-memory scan found nothing (e.g. file not yet fully loaded); fall
+    -- back to a single-file rg. Async so the main loop isn't blocked; guarded
+    -- against a newer search (my ~= token) or a closed panel so a stale position
+    -- isn't applied over the current selection.
+    discovery.first_match_in_file_async(abs, f.pattern, function(first)
+      if my ~= token or not state().open then return end
+      if first then
+        local pw = state().prev_win
+        if pw and vim.api.nvim_win_is_valid(pw) then
+          pcall(vim.api.nvim_win_set_cursor, pw, { first.row + 1, first.col })
+          pcall(vim.api.nvim_win_call, pw, function() vim.cmd("normal! zz") end)
+        end
+      end
+    end)
     return
   end
   f.match_idx = 1
@@ -116,37 +163,49 @@ end
 
 ----------------------------------------------------------------- search
 
-local function do_search(pattern)
-  local s = state()
-  local f = F()
-  local results = discovery.grep_files(pattern, s.target_buf)
-  table.sort(results, function(a, b)
-    if a.count ~= b.count then return a.count > b.count end
-    return (a.disp or ""):lower() < (b.disp or ""):lower()
-  end)
-  f.results = results
-  if f.selection > #results then f.selection = math.max(1, #results) end
-  if f.selection < 1 then f.selection = 1 end
-  M.render()
-  if #results > 0 then
-    local current = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(s.prev_win))
-    if results[f.selection].abs ~= current then
-      preview_highlighted()
-    else
-      -- same file still shown; refresh its match list + cursor
-      local buf = vim.api.nvim_win_get_buf(s.prev_win)
-      f.match_list = discovery.line_matches_in_file(buf, f.pattern)
-      f.match_idx = 1
-      local m = f.match_list[1]
-      if m then
-        pcall(vim.api.nvim_win_set_cursor, s.prev_win, { m.row + 1, m.col })
-        pcall(vim.api.nvim_win_call, s.prev_win, function() vim.cmd("normal! zz") end)
-      end
+local function do_search(my, pattern)
+  local bufnr_now
+  do local s0 = state(); bufnr_now = s0.target_buf end
+  discovery.grep_files_async(pattern, bufnr_now, function(results)
+    -- staleness: a newer keystroke superseded this search (token bumped in
+    -- schedule_search), or the panel closed before the async rg landed. Without
+    -- this guard a slow older rg would render stale results over the newer search.
+    if my ~= token or not state().open then
+      return
     end
-  else
-    f.match_list = {}
-    f.match_idx = 1
-  end
+    local s = state()
+    local f = F()
+    table.sort(results, function(a, b)
+      if a.count ~= b.count then return a.count > b.count end
+      return (a.disp or ""):lower() < (b.disp or ""):lower()
+    end)
+    f.results = results
+    if f.selection > #results then f.selection = math.max(1, #results) end
+    if f.selection < 1 then f.selection = 1 end
+    M.render()
+    if #results > 0 then
+      if not (s.prev_win and vim.api.nvim_win_is_valid(s.prev_win)) then return end
+      local current = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(s.prev_win))
+      if results[f.selection].abs ~= current then
+        preview_highlighted()
+      else
+        -- same file still shown; refresh its highlight, match list + cursor
+        highlight_preview(s.prev_win, pattern)
+        local buf = vim.api.nvim_win_get_buf(s.prev_win)
+        f.match_list = discovery.line_matches_in_file(buf, pattern)
+        f.match_idx = 1
+        local m = f.match_list[1]
+        if m then
+          pcall(vim.api.nvim_win_set_cursor, s.prev_win, { m.row + 1, m.col })
+          pcall(vim.api.nvim_win_call, s.prev_win, function() vim.cmd("normal! zz") end)
+        end
+      end
+    else
+      clear_preview_highlight(s.prev_win)
+      f.match_list = {}
+      f.match_idx = 1
+    end
+  end)
 end
 
 local function schedule_search(pattern)
@@ -156,16 +215,17 @@ local function schedule_search(pattern)
     pcall(function() f._timer:close() end)
     f._timer = nil
   end
+  token = token + 1  -- invalidate any in-flight async search against this new keystroke
+  local my = token
   f._timer = vim.defer_fn(function()
     f._timer = nil
-    do_search(pattern)
+    do_search(my, pattern)
   end, DEBOUNCE_MS)
 end
 
 ----------------------------------------------------------------- public
 
 function M.refresh(line)
-  local s = state()
   local f = F()
   f.active = true
   capture_origin()
@@ -232,6 +292,7 @@ function M.open()
   local f = F()
   local res = f.results[f.selection]
   if not res then
+    clear_preview_highlight(s.prev_win)
     f.active = false
     f.preview_abs = nil
     ctx.close()
@@ -244,6 +305,7 @@ function M.open()
   -- preview/open the chosen file at its first match, set @/ for n/N continuation
   load_preview(abs, first.row, first.col, pattern)
   set_search_hl(pattern)
+  clear_preview_highlight(s.prev_win)  -- hlsearch now owns the highlight
   -- mark inactive so close()'s on_close does not restore origin over the chosen file
   f.active = false
   f.preview_abs = nil
@@ -259,6 +321,7 @@ function M.restore_origin(keep_paused_after)
   if not state().origin then return end
   local o = state().origin
   if not o.win or not vim.api.nvim_win_is_valid(o.win) then return end
+  clear_preview_highlight(o.win)
   if o.abs and o.abs ~= "" then
     pcall(vim.api.nvim_win_call, o.win, function()
       local cur = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(o.win))

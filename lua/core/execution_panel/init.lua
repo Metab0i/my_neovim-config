@@ -46,7 +46,7 @@ local state = {
   ns = nil,             -- buffer highlighting namespace
   -- findstring state
   fstr = { active = false, pattern = "", results = {}, selection = 1,
-          match_list = {}, match_idx = 1, preview_abs = nil, _timer = nil },
+          match_list = {}, match_idx = 1, preview_abs = nil, _timer = nil, _match_id = nil },
   -- scopes state
   scopes = {},
   -- origin captured at panel open (for /fstr Esc restore)
@@ -232,7 +232,7 @@ local function close()
     state.fstr._timer = nil
   end
   state.fstr = { active = false, pattern = "", results = {}, selection = 1,
-                 match_list = {}, match_idx = 1, preview_abs = nil, _timer = nil }
+                 match_list = {}, match_idx = 1, preview_abs = nil, _timer = nil, _match_id = nil }
   state.scopes = {}
   if state.prev_win and vim.api.nvim_win_is_valid(state.prev_win) then
     pcall(vim.api.nvim_set_current_win, state.prev_win)
@@ -430,7 +430,7 @@ local function open_panel()
   state.re_obj = nil
   state.re_valid = true
   state.fstr = { active = false, pattern = "", results = {}, selection = 1,
-                 match_list = {}, match_idx = 1, preview_abs = nil, _timer = nil }
+                 match_list = {}, match_idx = 1, preview_abs = nil, _timer = nil, _match_id = nil }
   state.scopes = {}
   state.origin = {
     win = state.prev_win,
