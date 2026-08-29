@@ -97,7 +97,7 @@ shared panel state, window/dropdown infra, mode router, keymap dispatcher):
   substring search over the same discovery dirs (`.git`/`node_modules` excluded).
   Shows matching files with the total occurrence count right-aligned on each row,
   ranked by count desc then path asc. The highlighted file is **previewed live** in
-  the underlying window at its first match, debounced ~150 ms while typing and
+  the underlying window at its first match, debounced ~100 ms while typing and
   instant on arrow nav. `<Up>`/`<Down>` cycle files; `<Tab>`/`<S-Tab>` cycle
   occurrences within the previewed file; `<Enter>` opens the highlighted file and
   hands the pattern to `@/` (literal, `\V…`) with `hlsearch` so `n`/`N` continue;
