@@ -71,25 +71,34 @@ to another file, `<M-Left>` returns you to the previous file/position.
 No keymap - always on. Source: `ui/context.lua` (+ shared engine `core/
 scope_engine.lua`).
 
-While the cursor is inside a scope (function/class/method/block) whose opening
-line has scrolled out of view, that opener line is pinned to the top of the
-window as a single-line floating header (with a thin separator underneath), so
-you always know which scope you are in while scrolling. When the opener scrolls
-back into view the header disappears.
+While the cursor is inside nested scopes (function/class/method/block) whose
+opening lines have scrolled out of view, those opener lines are pinned to the
+top of the window as a multi-line floating header - the full ancestor chain,
+outermost at the top and innermost at the bottom - so you always know where you
+are while scrolling. When a scope's opener scrolls back into view it drops off
+the header; when you reach the file top the header disappears.
 
 Scope resolution merges LSP `textDocument/documentSymbol` (functions, classes,
 methods, structs, ...) with the same indentation heuristic the execution
 panel's `/fold` commands use (block scopes without LSP), via the shared
-`core/scope_engine.lua` module. The innermost enclosing scope is shown. It is
-rendered per-window, so splits of the same file each get their own header.
+`core/scope_engine.lua` module. All enclosing scopes are shown, stacked
+outermost-first, with each child indented 2 spaces per level to convey nesting.
+It is rendered per-window, so splits of the same file each get their own header.
 
-Styling: highlight groups `StickyScope` and `StickyScopeSeparator` (both
-default to `Comment`; override them in your config to restyle). The winbar
-(`ui/winbar.lua`) is unchanged - this header lives inside the viewport.
+Styling: highlight group `StickyScope` (by default a subtle band: `Comment`
+foreground over the `CursorLine` background, re-derived when the colorscheme
+changes; override it in your config to restyle - the header is separated from
+the buffer by its background, with no border line). `StickyScopeSeparator`
+remains defined in case you want to underline the last header line yourself.
+The winbar (`ui/winbar.lua`) is unchanged - this header lives inside the
+viewport.
 
-The header overlays the topmost visible line; the config's `scrolloff = 1`
-keeps the cursor off that line while scrolling, so the cursor is never hidden
-behind the header (it always overlays the context line above the cursor).
+The header overlays the topmost visible lines and never covers the cursor: its
+height is dynamically capped to the number of screen rows above the cursor
+(wrap/fold aware), capped at 6 lines, and when it must shrink the innermost
+(most specific) scopes are kept. The config's `scrolloff = 1` normally keeps a
+context line above the cursor anyway, so the cursor is never hidden behind the
+header.
 
 ### Execution Panel
 

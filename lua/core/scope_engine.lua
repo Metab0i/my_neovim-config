@@ -220,6 +220,31 @@ function M.find_innermost(ranges, cursor_line)
   return best
 end
 
+-- full chain of ranges enclosing `cursor_line`, outermost-first (ascending
+-- indent, then ascending opener), deduped by opener line. A scope commonly
+-- appears twice -- once from the LSP symbol list and once from the indent
+-- heuristic -- and both entries share the opener line, so opener-dedup merges
+-- them. NOTE the sort invariant is approximate when an LSP symbol's opener
+-- indent differs from its true nesting depth (e.g. python decorators): a
+-- mis-ranked entry just degrades to fewer header lines for callers that take a
+-- contiguous prefix, never to wrong lines.
+function M.enclosing_chain(ranges, cursor_line)
+  local seen = {}
+  local chain = {}
+  for _, r in ipairs(ranges or {}) do
+    if cursor_line >= r.opener and cursor_line <= r.end_
+        and seen[r.opener] == nil then
+      seen[r.opener] = true
+      chain[#chain + 1] = r
+    end
+  end
+  table.sort(chain, function(a, b)
+    if a.indent ~= b.indent then return a.indent < b.indent end
+    return a.opener < b.opener
+  end)
+  return chain
+end
+
 --------------------------------------------------------- LSP document symbols
 
 -- token-guarded async documentSymbol fetch. Flattens ALL FOLDABLE symbols
