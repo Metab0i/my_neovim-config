@@ -25,7 +25,7 @@ vim.o.softtabstop = 2
 -- Indentation
 vim.wo.wrap = true
 vim.wo.breakindent = true
-vim.opt.showbreak = "  "
+vim.opt.showbreak = "↪ "
 
 -- Other
 vim.o.clipboard = "unnamed"
