@@ -6,6 +6,10 @@ vim.o.numberwidth = 1
 -- Cursor configs
 vim.o.cursorline = true
 vim.o.cursorlineopt = "number"
+-- Keep one line of context above/below the cursor while scrolling. This also
+-- keeps the cursor off the top visible line so the sticky-scope header
+-- (ui/context.lua, a floating overlay at row 0) never covers the cursor.
+vim.o.scrolloff = 1
 vim.api.nvim_set_hl(0, "CursorLineNr", { fg = "#FFFFFF", bold = true })
 vim.opt.guicursor = {
   "n-c-v:block",

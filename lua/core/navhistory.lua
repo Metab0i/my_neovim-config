@@ -6,7 +6,7 @@ local navigating = false
 local paused = false  -- when true, _record skips so external features (e.g. the
                      -- execution panel's /fstr live preview) can move the cursor
                      -- across files without polluting the back/forward ring.
-local MAX = 5
+local MAX = 15
 
 local function pos_equal(a, b)
   if a == nil or b == nil then return a == b end

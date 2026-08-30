@@ -16,6 +16,10 @@
 
 local M = {}
 local ctx = nil
+-- Scope ranges (indent heuristic + FOLDABLE kinds + innermost picker) live in
+-- the shared scope_engine so the sticky-scope header (ui/context.lua) uses the
+-- exact same machinery.
+local scope = require("core.scope_engine")
 
 function M.init(c) ctx = c end
 
@@ -32,182 +36,6 @@ local token = 0
 local setup_by_buf = {}    -- [bufnr] = true once fold_setup has run for this buffer
 local saved_by_buf = {}    -- [bufnr] = snapshot from save_fold_opts for restore_fold_opts
 local openers_by_buf = {}  -- [bufnr] = { [opener_lnum] = opener_lnum } LSP dedupe set
-
--- foldable documentSymbol kinds (standard set)
-local FOLDABLE = {
-  [2] = true,  -- Module
-  [3] = true,  -- Namespace
-  [5] = true,  -- Class
-  [6] = true,  -- Method
-  [9] = true,  -- Constructor
-  [10] = true, -- Enum
-  [11] = true, -- Interface
-  [12] = true, -- Function
-  [23] = true, -- Struct
-}
--- fall back to lsp.protocol if present (same numbers)
-local ok, proto = pcall(function() return vim.lsp and vim.lsp.protocol and vim.lsp.protocol.SymbolKind end)
-if ok and proto then
-  for _, name in ipairs({ "Module", "Namespace", "Class", "Method", "Constructor",
-    "Enum", "Interface", "Function", "Struct" }) do
-    if proto[name] then FOLDABLE[proto[name]] = true end
-  end
-  -- merge additional fallback numbers already set above
-end
-for _, n in ipairs({ 2, 3, 5, 6, 9, 10, 11, 12, 23 }) do FOLDABLE[n] = true end
-
---------------------------------------------------------- indent scope heuristic
-
-local function line_indent(line, tabstop)
-  local ts = tabstop or 8
-  if ts < 1 then ts = 8 end
-  local lead = (line or ""):match("^[\t ]*") or ""
-  local col = 0
-  for ch in lead:gmatch("[\t ]") do
-    if ch == " " then col = col + 1
-    else col = col + (ts - (col % ts)) end
-  end
-  return col
-end
-
-local function is_blank(line) return line:match("^%s*$") ~= nil end
-
-local function looks_like_opener(line)
-  local s = line:lower()
-  if s == "" then return false end
-  if s:match("%{%s*$") then return true end            -- ends with {
-  if s:match(":%s*$") then return true end             -- ends with : (python)
-  if s:match("%sthen%s*$") then return true end
-  if s:match("%sdo%s*$") then return true end
-  if s:match("else%s*$") then return true end
-  if s:match("begin%s*$") then return true end
-  local kw = s:match("^%s*[}%%s]*else[%s{]") or false
-  for _, k in ipairs({ "function", "def ", "class", "struct", "interface",
-    "enum%s", "namespace", "if ", "for ", "while ", "switch", "try", "catch",
-    "finally" }) do
-    if s:find(k, 1, true) then return true end
-  end
-  if s:match("^%s*{+%s*$") then return true end        -- bare block opener
-  if s:match("%b{}") and s:match("{%s*$") then return true end
-  return false
-end
-
--- true if the line is ONLY a brace (possibly indented), e.g. "{" or "  {".
--- Brace-specific; inert for brace-less languages (python/lua) where this never matches.
-local function bare_brace_line(line)
-  return line ~= nil and line:match("^%s*{%s*$") ~= nil
-end
-
--- true if the opener line itself already starts its body on the same line
--- (K&R "if (c) {", python "if c:", lua "if c then", "do", "else", "begin").
--- When false, the body may start on the NEXT line (Allman brace or indent block).
-local function body_starts_on_opener_line(line)
-  local s = line:lower()
-  if s:match("{%s*$") then return true end
-  if s:match(":%s*$") then return true end             -- python
-  if s:match("%sthen%s*$") then return true end        -- lua
-  if s:match("%sdo%s*$") then return true end
-  if s:match("else%s*$") then return true end
-  if s:match("begin%s*$") then return true end
-  return false
-end
-
--- next non-blank line index after `from` (nil if none)
-local function next_nonblank(bufnr, from, n)
-  for j = from + 1, n do
-    local l = vim.api.nvim_buf_get_lines(bufnr, j - 1, j, false)[1]
-    if l and not is_blank(l) then return j end
-  end
-  return nil
-end
-
--- true if the line is a scope CLOSER that belongs to the scope and should be
--- folded into its body (a bare "}" or a lua-style "end[)];,]*"). For brace-less
--- dedent languages (python) the dedented line is the NEXT statement, not a
--- closer, so it is excluded from the fold (handled by the caller).
-local function is_closer_line(line)
-  if line == nil then return false end
-  if line:match("^%s*}%s*$") then return true end
-  if line:match("^%s*end[%s%)%;%,%]]*$") then return true end
-  return false
-end
-
--- returns list of {start=1based, end_=1based, opener=1based, indent=col-based}
--- where the foldable body is lines [start .. end_] and the opener (line `opener`)
--- stays visible. Allman/own-line braces are collapsed onto the preceding keyword
--- opener (so a brace-less language like python/lua is unaffected). Indent math is
--- tabstop-aware: a TAB advances to the next tabstop column (NOT 1), so a
--- tab-indented body line counts as deep, not shallow. ONLY multi-line bodies
--- (end_ > start) are actually folded; a single-line scope is still RETURNED in
--- the list so /fold's innermost picker can choose it and no-op (rather than fall
--- through to the enclosing function and "fold everything").
-local function compute_indent_ranges(bufnr)
-  local ranges = {}
-  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return ranges end
-  local n = vim.api.nvim_buf_line_count(bufnr)
-  local tabstop = tonumber(vim.bo[bufnr] and vim.bo[bufnr].tabstop) or 8
-  if tabstop < 1 then tabstop = 8 end
-  local consumed = {}  -- brace lines already absorbed by a preceding keyword opener
-  for i = 1, n do
-    if not consumed[i] then
-      local line = vim.api.nvim_buf_get_lines(bufnr, i - 1, i, false)[1]
-      if line and not is_blank(line) and looks_like_opener(line) then
-        local ind = line_indent(line, tabstop)
-        local body_start = i + 1
-        -- Allman collapse: opener doesn't start its body on this line AND the next
-        -- non-blank line is a bare "{" at the same indent -> anchor on the keyword
-        -- line `i`, skip the brace line, body begins after it.
-        if not body_starts_on_opener_line(line) then
-          local nb = next_nonblank(bufnr, i, n)
-          if nb and bare_brace_line(vim.api.nvim_buf_get_lines(bufnr, nb - 1, nb, false)[1])
-              and line_indent(vim.api.nvim_buf_get_lines(bufnr, nb - 1, nb, false)[1], tabstop) == ind then
-            body_start = nb + 1
-            consumed[nb] = true
-          end
-        end
-        -- end: first later non-blank line with indent <= ind (closes the scope).
-        -- Start scanning at body_start so a same-indent Allman brace (consumed)
-        -- is not mistaken for the closer.
-        local endline = nil
-        for j = body_start, n do
-          local l2 = vim.api.nvim_buf_get_lines(bufnr, j - 1, j, false)[1]
-          if l2 and not is_blank(l2) and line_indent(l2, tabstop) <= ind then
-            endline = j
-            break
-          end
-        end
-        -- body_end:
-        --   * no closer found (EOF)               -> include to end of file (n)
-        --   * the endline IS a closer ("}"/"end") -> include it (folded into body,
-        --     matching the opener-visible mock; a bare-"}"-terminated single
-        --     statement then becomes a 2-line body, which IS foldable)
-        --   * the endline is a dedented sibling (python) or a continuation clause
-        --     like "} else {" -> exclude it (it's the next statement, not part of
-        --     this scope; a single-line then-branch terminated by "} else {" thus
-        --     collapses to a 1-line range and is intentionally NOT folded)
-        local body_end
-        if endline == nil then
-          body_end = n
-        else
-          local endline_text = vim.api.nvim_buf_get_lines(bufnr, endline - 1, endline, false)[1]
-          if is_closer_line(endline_text) then
-            body_end = endline
-          else
-            body_end = endline - 1
-          end
-        end
-        if body_end < body_start then body_end = body_start end  -- clamp to >= body_start
-        -- keep the range even when single-line (end_ == start): it must stay in the
-        -- list so /fold's innermost picker settles on it and no-ops instead of
-        -- ascending to the enclosing scope (which would "fold everything").
-        if body_start <= body_end then
-          table.insert(ranges, { opener = i, start = body_start, end_ = body_end, indent = ind })
-        end
-      end
-    end
-  end
-  return ranges
-end
 
 --------------------------------------------------------- fold set/restore helpers
 
@@ -279,7 +107,7 @@ local function fire_lsp_merge(win, bufnr)
       if not syms then return end
       for _, sym in ipairs(syms) do
         local range = sym.range or (sym.selectionRange and sym.selectionRange) or nil
-        if range and range.start and range["end"] and FOLDABLE[sym.kind or -1] then
+        if range and range.start and range["end"] and scope.FOLDABLE[sym.kind or -1] then
           local s_line = range.start.line + 1
           local e_line = range["end"].line + 1
           if e_line - 1 >= s_line + 2 and not seen_opener_dir[s_line] then
@@ -315,7 +143,7 @@ function M.dispatch(cmd, win, bufnr)
   end
   ensure_setup(win, bufnr)
   local st = state()
-  local indent_ranges = compute_indent_ranges(bufnr)
+  local indent_ranges = scope.compute_indent_ranges(bufnr)
   if cmd == "foldall" then
     for _, r in ipairs(indent_ranges) do
       if r.end_ > r.start then  -- only multi-line bodies are foldable
@@ -335,15 +163,7 @@ function M.dispatch(cmd, win, bufnr)
     -- fold at the cursor, by design.
     local cur = (st.origin and st.origin.pos) and st.origin.pos[1] or nil
     if cur then
-      local best = nil
-      for _, r in ipairs(indent_ranges) do
-        if cur >= r.opener and cur <= r.end_ then
-          if not best or r.indent > best.indent
-              or (r.indent == best.indent and r.opener > best.opener) then
-            best = r
-          end
-        end
-      end
+      local best = scope.find_innermost(indent_ranges, cur)
       if best and best.end_ > best.start then
         make_fold(win, best.start, best.end_)
         openers_by_buf[bufnr][best.opener] = best.opener
@@ -361,15 +181,7 @@ function M.dispatch(cmd, win, bufnr)
     -- /fold, which also no-ops there).
     local cur = (st.origin and st.origin.pos) and st.origin.pos[1] or nil
     if not (cur and win and vim.api.nvim_win_is_valid(win)) then return end
-    local best = nil
-    for _, r in ipairs(indent_ranges) do
-      if cur >= r.opener and cur <= r.end_ then
-        if not best or r.indent > best.indent
-            or (r.indent == best.indent and r.opener > best.opener) then
-          best = r
-        end
-      end
-    end
+    local best = scope.find_innermost(indent_ranges, cur)
     if best then
       pcall(vim.api.nvim_win_set_cursor, win, { best.start, 0 })
       pcall(vim.api.nvim_win_call, win, function()

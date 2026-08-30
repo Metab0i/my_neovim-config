@@ -62,9 +62,34 @@ flipping below when no room above (cursor movement closes it); **(2)** focus -
 | Normal | `<M-h>`       | Navigate back    | `core/navhistory.lua`
 | Normal | `<M-l>`       | Navigate forward | `core/navhistory.lua`
 
-5-slot ring of cursor positions; records every real file-buffer move (incl.
+15-slot ring of cursor positions; records every real file-buffer move (incl.
 jump commands), skips floating scratch buffers, and works cross-file - jump
 to another file, `<M-Left>` returns you to the previous file/position.
+
+### Sticky Scope Context
+
+No keymap - always on. Source: `ui/context.lua` (+ shared engine `core/
+scope_engine.lua`).
+
+While the cursor is inside a scope (function/class/method/block) whose opening
+line has scrolled out of view, that opener line is pinned to the top of the
+window as a single-line floating header (with a thin separator underneath), so
+you always know which scope you are in while scrolling. When the opener scrolls
+back into view the header disappears.
+
+Scope resolution merges LSP `textDocument/documentSymbol` (functions, classes,
+methods, structs, ...) with the same indentation heuristic the execution
+panel's `/fold` commands use (block scopes without LSP), via the shared
+`core/scope_engine.lua` module. The innermost enclosing scope is shown. It is
+rendered per-window, so splits of the same file each get their own header.
+
+Styling: highlight groups `StickyScope` and `StickyScopeSeparator` (both
+default to `Comment`; override them in your config to restyle). The winbar
+(`ui/winbar.lua`) is unchanged - this header lives inside the viewport.
+
+The header overlays the topmost visible line; the config's `scrolloff = 1`
+keeps the cursor off that line while scrolling, so the cursor is never hidden
+behind the header (it always overlays the context line above the cursor).
 
 ### Execution Panel
 
@@ -154,6 +179,7 @@ Peek when no LSP server is attached / definition not found / file unreadable.
 |--------------|-------------------------------------|--------------------------
 | Line numbers | Absolute + relative                 | `core/navigation.lua`
 | Cursorline   | Number-only highlight               | `core/navigation.lua`
+| Scrolloff    | 1 (keeps the cursor off the row the sticky-scope header overlays) | `core/navigation.lua`
 | Shift width  | 2 spaces                            | `core/navigation.lua`
 | Clipboard    | Sync with system (`unnamed`)        | `core/navigation.lua`
 | Leader       | `<Space>`                           | `core/navigation.lua`
@@ -300,6 +326,7 @@ are harmless no-ops elsewhere:
 init.lua                   - entry point, requires all modules
 lua/core/navigation.lua    - editor settings, leader key, general keymaps
 lua/core/navhistory.lua    - back/forward cursor position history (pause/resume for /fstr preview)
+lua/core/scope_engine.lua  - shared scope ranges (indent heuristic + LSP documentSymbol + innermost picker)
 lua/core/notice.lua        - transient popup notifications
 lua/core/mason.lua         - mason + lspconfig LSP server management
 lua/core/execution_panel/  - quick-action panel (`<leader><leader>`)
@@ -313,6 +340,7 @@ lua/lsp/init.lua           - LSP keymaps, hover border, diagnostics
 lua/autocomplete.lua       - virtual-line LSP autocomplete (C-Space toggle)
 lua/peek.lua               - peek definition toggle
 lua/ui/winbar.lua          - winbar (modified flag + full path)
+lua/ui/context.lua         - sticky current-scope header (pinned scope line while scrolling)
 lua/ui/statusline.lua      - statusline (diagnostics + LSP + percentage)
 pack/mason/start/*         - mason.nvim, mason-lspconfig.nvim, nvim-lspconfig (git submodules)
 ```
