@@ -100,6 +100,29 @@ height is dynamically capped to the number of screen rows above the cursor
 context line above the cursor anyway, so the cursor is never hidden behind the
 header.
 
+### Git Diff
+
+| Command     | Action                                        | Source
+|-------------|-----------------------------------------------|--------------------------
+| `:GitDiff`  | Toggle inline diff of the current file vs HEAD | `gitdiff.lua`
+
+No keymap (Neovim requires uppercase-initial user command names; `<leader>gd` is
+taken by go-to-definition). A global on/off toggle - while ON, the overlay
+follows whatever file is current. Added lines get a green `+` in the sign
+column; removed lines appear as red `-` virtual lines at the position they were
+removed, so the buffer reads like an inline `git diff`. The diff runs against
+the *live buffer contents* (unsaved edits included, via `vim.diff` against
+cached HEAD content) and recomputes on a short debounce after every change, so
+edits integrate fluidly. Toggling off clears the overlay and restores
+`signcolumn` (forced to `yes` while ON so signs never reflow the text).
+
+Untracked or staged-but-uncommitted files show every line as added; files
+outside a git repo get a notification and the toggle stays off (the view then
+follows the next real file). The HEAD base is refetched on `FocusGained`, so a
+commit or branch switch made elsewhere is picked up when you return to nvim.
+Styling: `GitDiffAdd` / `GitDiffDelete` highlight groups, derived from the
+theme's `DiffAdd` / `DiffDelete` colors with a green/red fallback.
+
 ### Execution Panel
 
 | Mode   | Key              | Action                          | Source
@@ -171,8 +194,9 @@ otherwise performs the default `<CR>` (next line).
 ### Notifications
 
 Transient popups in the top-right, rounded border, auto-dismiss after 5 s or on
-cursor movement. Used by `<C-Space>` when no diagnostics at cursor, and by
-Peek when no LSP server is attached / definition not found / file unreadable.
+cursor movement. Used by `<C-Space>` when no diagnostics at cursor, by Peek when
+no LSP server is attached / definition not found / file unreadable, and by
+`:GitDiff` when the file is outside a git repository.
 
 ### General
 
@@ -348,6 +372,7 @@ lua/core/execution_panel/  - quick-action panel (`<leader><leader>`)
 lua/lsp/init.lua           - LSP keymaps, hover border, diagnostics
 lua/autocomplete.lua       - virtual-line LSP autocomplete (C-Space toggle)
 lua/peek.lua               - peek definition toggle
+lua/gitdiff.lua            - :GitDiff live inline diff vs HEAD (sign/virt-line overlay)
 lua/ui/winbar.lua          - winbar (modified flag + full path)
 lua/ui/context.lua         - sticky current-scope header (pinned scope line while scrolling)
 lua/ui/statusline.lua      - statusline (diagnostics + LSP + percentage)
