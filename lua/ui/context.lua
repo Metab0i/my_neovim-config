@@ -30,10 +30,6 @@ local NS_DEBOUNCE_MS = 40
 local ZINDEX = 10
 local MAX_LINES = 6  -- cap for pathologically deep chains
 
--- test/debug hook: number of float (re)configurations applied. A no-op cursor
--- move must not increment this (the flicker guard).
-M._debug = { set_config = 0 }
-
 -- per-window float state: [winid] = { float_winid, bufnr }
 local window_contexts = {}
 -- caches: [bufnr] = entries / ranges
@@ -125,7 +121,6 @@ local function ensure_float(win, wc, width, height)
     -- record only after a successful apply, so a failed call is retried next time
     if ok then
       wc.last = { width = width, height = height, col = wc.col }
-      M._debug.set_config = M._debug.set_config + 1
     end
     return
   end
@@ -142,7 +137,6 @@ local function ensure_float(win, wc, width, height)
     zindex = ZINDEX,
   })
   wc.last = { width = width, height = height, col = wc.col }
-  M._debug.set_config = M._debug.set_config + 1
   pcall(function()
     vim.wo[wc.float_winid].wrap = false
     vim.wo[wc.float_winid].foldenable = false
