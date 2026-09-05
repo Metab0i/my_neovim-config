@@ -4,9 +4,11 @@
 -- A global on/off toggle. While ON, the current file is overlaid with
 -- extmarks computed from a diff of the LIVE buffer contents against the
 -- file's HEAD revision:
---   * added lines    -> green "+" in the sign column
---   * removed lines  -> red "-" virtual lines, rendered at the position the
---     line was removed, so the buffer reads like an inline `git diff`
+--   * added lines    -> green "+" in the sign column, over a subtle yellow
+--     background tint on the added text
+--   * removed lines  -> red "-" virtual lines over a subtle red background
+--     tint, rendered at the position the line was removed, so the buffer
+--     reads like an inline `git diff`
 -- The view follows whatever file is current (BufEnter/WinEnter) and
 -- recomputes on a short debounce after every text change, so edits are
 -- integrated live. `:GitDiff` again clears everything and restores
@@ -44,6 +46,23 @@ local DEBOUNCE_MS = 40
 -- Below the autocomplete ghost line (priority 100) on the same row.
 local VLINE_PRIORITY = 40
 
+-- Temporary diagnostic logging: appends timestamped lines to a per-user log
+-- under /tmp (user-specific so the owner can always write it). Lets the
+-- add-tint rendering be confirmed against ground truth from a real
+-- environment. Remove once confirmed.
+local LOG_PATH = ("/tmp/gitdiff-%s.log"):format(os.getenv("USER") or os.getenv("LOGNAME") or "unknown")
+local function log(...)
+  local parts = {}
+  for i = 1, select("#", ...) do
+    parts[i] = tostring(select(i, ...))
+  end
+  local f = io.open(LOG_PATH, "a")
+  if f then
+    f:write(os.date("%H:%M:%S ") .. table.concat(parts, " ") .. "\n")
+    f:close()
+  end
+end
+
 ------------------------------------------------------------- highlight
 
 -- Green "+" / red "-". Derived from the theme's DiffAdd/DiffDelete colors
@@ -63,6 +82,22 @@ local function apply_hl_defaults()
   end
   pcall(vim.api.nvim_set_hl, 0, "GitDiffAdd", derive("DiffAdd", "#50FA7B"))
   pcall(vim.api.nvim_set_hl, 0, "GitDiffDelete", derive("DiffDelete", "#FF5555"))
+  -- Subtle-but-visible background tints for the changed sections: yellow
+  -- behind added lines, red behind removed virtual lines. Fixed colors tuned
+  -- for a dark background; bright enough to be clearly perceptible on their
+  -- own (additions have no foreground change, so the yellow tint must carry
+  -- the visual cue - the earlier #4a4a1a was too dark to notice).
+  pcall(vim.api.nvim_set_hl, 0, "GitDiffAddBg", { default = true, bg = "#6b5a00" })
+  -- The red `-` text keeps the marker fg (derived from the resolved
+  -- GitDiffDelete, so a user override survives) while gaining the tint bg.
+  local del = { default = true, fg = "#FF5555", bg = "#6a1a1a" }
+  local okd, dhl = pcall(vim.api.nvim_get_hl, 0, { name = "GitDiffDelete", link = false })
+  if okd and type(dhl) == "table" and dhl.fg then del.fg = dhl.fg end
+  pcall(vim.api.nvim_set_hl, 0, "GitDiffDeleteBg", del)
+
+  local addbg = vim.api.nvim_get_hl(0, { name = "GitDiffAddBg", link = false })
+  log("apply_hl_defaults GitDiffAddBg.bg =",
+    (addbg.bg and string.format("#%06x", addbg.bg)) or tostring(addbg.bg))
 end
 apply_hl_defaults()
 
@@ -195,6 +230,7 @@ local function apply(bufnr)
         virt_lines_above = run.above,
         priority = VLINE_PRIORITY,
       })
+      log("removal virt_lines row=" .. run.row, "chunks=" .. #run.chunks, "hl_group=GitDiffDeleteBg")
     end
     run = nil
   end
@@ -215,10 +251,23 @@ local function apply(bufnr)
       flush()
       local row = math.max(buf_ln - 1, 0)
       if row <= line_count - 1 then
+        -- Sign marker and text background tint as two extmarks (sign column
+        -- vs text bg). The tint uses an explicit end_col range (NOT hl_eol -
+        -- that is a no-op on a zero-width single-line extmark, so it never
+        -- painted) and tints the added text only; full-line width isn't
+        -- possible in nvim 0.11.7 (end_col = -1 is rejected).
         pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, 0, {
           sign_text = "+",
           sign_hl_group = "GitDiffAdd",
         })
+        local bline = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
+        local end_col = #bline
+        pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, 0, {
+          hl_group = "GitDiffAddBg",
+          end_col = end_col,
+          priority = 200,
+        })
+        log("add tint row=" .. row, "end_col=" .. end_col, "hl_group=GitDiffAddBg", "priority=200")
       end
       buf_ln = buf_ln + 1
 
@@ -255,7 +304,7 @@ local function apply(bufnr)
         flush()
         run = { row = row, above = above, chunks = {} }
       end
-      run.chunks[#run.chunks + 1] = { { "-" .. line:sub(2), "GitDiffDelete" } }
+      run.chunks[#run.chunks + 1] = { { "-" .. line:sub(2), "GitDiffDeleteBg" } }
     end
     -- "\" ("\ No newline at end of file") and empty lines: nothing to place
   end
@@ -293,6 +342,7 @@ end
 function M.toggle()
   if enabled then
     disable()
+    log("GitDiff disabled")
     return
   end
   local bufnr = vim.api.nvim_get_current_buf()
@@ -311,6 +361,7 @@ function M.toggle()
   saved_signcolumn = vim.go.signcolumn
   vim.go.signcolumn = "yes"
   apply(bufnr)
+  log("GitDiff enabled bufnr=" .. bufnr)
 end
 
 ------------------------------------------------------------- debounce

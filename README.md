@@ -109,7 +109,8 @@ header.
 No keymap (Neovim requires uppercase-initial user command names; `<leader>gd` is
 taken by go-to-definition). A global on/off toggle - while ON, the overlay
 follows whatever file is current. Added lines get a green `+` in the sign
-column; removed lines appear as red `-` virtual lines at the position they were
+column over a subtle yellow background on the added text; removed lines appear
+as red `-` virtual lines over a subtle red background at the position they were
 removed, so the buffer reads like an inline `git diff`. The diff runs against
 the *live buffer contents* (unsaved edits included, via `vim.diff` against
 cached HEAD content) and recomputes on a short debounce after every change, so
@@ -121,7 +122,8 @@ outside a git repo get a notification and the toggle stays off (the view then
 follows the next real file). The HEAD base is refetched on `FocusGained`, so a
 commit or branch switch made elsewhere is picked up when you return to nvim.
 Styling: `GitDiffAdd` / `GitDiffDelete` highlight groups, derived from the
-theme's `DiffAdd` / `DiffDelete` colors with a green/red fallback.
+theme's `DiffAdd` / `DiffDelete` colors with a green/red fallback, plus
+`GitDiffAddBg` / `GitDiffDeleteBg` for the subtle yellow/red section tints.
 
 ### Execution Panel
 
