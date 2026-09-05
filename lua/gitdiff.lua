@@ -5,7 +5,7 @@
 -- extmarks computed from a diff of the LIVE buffer contents against the
 -- file's HEAD revision:
 --   * added lines    -> green "+" in the sign column, over a subtle yellow
---     background tint on the added text
+--     background tint across the full line width
 --   * removed lines  -> red "-" virtual lines over a subtle red background
 --     tint, rendered at the position the line was removed, so the buffer
 --     reads like an inline `git diff`
@@ -45,23 +45,11 @@ local saved_signcolumn = nil
 local DEBOUNCE_MS = 40
 -- Below the autocomplete ghost line (priority 100) on the same row.
 local VLINE_PRIORITY = 40
-
--- Temporary diagnostic logging: appends timestamped lines to a per-user log
--- under /tmp (user-specific so the owner can always write it). Lets the
--- add-tint rendering be confirmed against ground truth from a real
--- environment. Remove once confirmed.
-local LOG_PATH = ("/tmp/gitdiff-%s.log"):format(os.getenv("USER") or os.getenv("LOGNAME") or "unknown")
-local function log(...)
-  local parts = {}
-  for i = 1, select("#", ...) do
-    parts[i] = tostring(select(i, ...))
-  end
-  local f = io.open(LOG_PATH, "a")
-  if f then
-    f:write(os.date("%H:%M:%S ") .. table.concat(parts, " ") .. "\n")
-    f:close()
-  end
-end
+-- Padding width for removed-line virtual text: each virt_line is padded with
+-- spaces to this display width so the tint spans the full line width. 300
+-- comfortably exceeds any real window width; virt_lines default to `trunc`
+-- overflow, so the padding is simply clipped at the window edge.
+local VIRT_LINE_WIDTH = 300
 
 ------------------------------------------------------------- highlight
 
@@ -94,10 +82,6 @@ local function apply_hl_defaults()
   local okd, dhl = pcall(vim.api.nvim_get_hl, 0, { name = "GitDiffDelete", link = false })
   if okd and type(dhl) == "table" and dhl.fg then del.fg = dhl.fg end
   pcall(vim.api.nvim_set_hl, 0, "GitDiffDeleteBg", del)
-
-  local addbg = vim.api.nvim_get_hl(0, { name = "GitDiffAddBg", link = false })
-  log("apply_hl_defaults GitDiffAddBg.bg =",
-    (addbg.bg and string.format("#%06x", addbg.bg)) or tostring(addbg.bg))
 end
 apply_hl_defaults()
 
@@ -230,7 +214,6 @@ local function apply(bufnr)
         virt_lines_above = run.above,
         priority = VLINE_PRIORITY,
       })
-      log("removal virt_lines row=" .. run.row, "chunks=" .. #run.chunks, "hl_group=GitDiffDeleteBg")
     end
     run = nil
   end
@@ -251,23 +234,22 @@ local function apply(bufnr)
       flush()
       local row = math.max(buf_ln - 1, 0)
       if row <= line_count - 1 then
-        -- Sign marker and text background tint as two extmarks (sign column
-        -- vs text bg). The tint uses an explicit end_col range (NOT hl_eol -
-        -- that is a no-op on a zero-width single-line extmark, so it never
-        -- painted) and tints the added text only; full-line width isn't
-        -- possible in nvim 0.11.7 (end_col = -1 is rejected).
+        -- Single sign extmark carrying both the "+" marker and the full-line
+        -- background tint via `line_hl_group` (the same mechanism gitsigns
+        -- uses for its `linehl` highlights). `line_hl_group` fills the whole
+        -- line - text and the empty space to its right - so the yellow tint
+        -- spans the full line width. (A range with `end_col = -1` +
+        -- `hl_eol = true` cannot do this: `hl_eol` only applies to multiline
+        -- ranges, so it is silently ignored on a single-line extmark.)
+        -- A side effect: empty added lines are now tinted too (line_hl_group
+        -- fills the whole line, empty or not) - a deliberate change from the
+        -- old text-only range, which left them untinted.
         pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, 0, {
           sign_text = "+",
           sign_hl_group = "GitDiffAdd",
-        })
-        local bline = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
-        local end_col = #bline
-        pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, 0, {
-          hl_group = "GitDiffAddBg",
-          end_col = end_col,
+          line_hl_group = "GitDiffAddBg",
           priority = 200,
         })
-        log("add tint row=" .. row, "end_col=" .. end_col, "hl_group=GitDiffAddBg", "priority=200")
       end
       buf_ln = buf_ln + 1
 
@@ -304,7 +286,15 @@ local function apply(bufnr)
         flush()
         run = { row = row, above = above, chunks = {} }
       end
-      run.chunks[#run.chunks + 1] = { { "-" .. line:sub(2), "GitDiffDeleteBg" } }
+      local vtext = "-" .. line:sub(2)
+      run.chunks[#run.chunks + 1] = {
+        { vtext, "GitDiffDeleteBg" },
+        -- Pad with spaces (same hl group) so the red tint spans the full line
+        -- width. virt_lines have no built-in full-width option; the trailing
+        -- whitespace chunk carries the tint to the window edge (clipped by
+        -- `trunc` overflow). `strdisplaywidth` so multibyte lines pad right.
+        { string.rep(" ", math.max(VIRT_LINE_WIDTH - vim.fn.strdisplaywidth(vtext), 0)), "GitDiffDeleteBg" },
+      }
     end
     -- "\" ("\ No newline at end of file") and empty lines: nothing to place
   end
@@ -342,7 +332,6 @@ end
 function M.toggle()
   if enabled then
     disable()
-    log("GitDiff disabled")
     return
   end
   local bufnr = vim.api.nvim_get_current_buf()
@@ -361,7 +350,6 @@ function M.toggle()
   saved_signcolumn = vim.go.signcolumn
   vim.go.signcolumn = "yes"
   apply(bufnr)
-  log("GitDiff enabled bufnr=" .. bufnr)
 end
 
 ------------------------------------------------------------- debounce

@@ -2,9 +2,12 @@
 
 A hand-rolled Lua Neovim config with no plugin manager, except LSP install/management via `mason.nvim` + `mason-lspconfig.nvim` + `nvim-lspconfig` (git submodules under `pack/mason/start/*`).
 
+> **Requires Neovim ≥ 0.12.** This config is developed and tested against 0.12
+> (e.g. the full-line-width `line_hl_group` tint in `:GitDiff`). It may not
+> behave correctly on earlier versions.
+
 
 ## Keybindings
-
 ### LSP
 
 | Mode   | Key          | Action                                          | Source
@@ -109,7 +112,7 @@ header.
 No keymap (Neovim requires uppercase-initial user command names; `<leader>gd` is
 taken by go-to-definition). A global on/off toggle - while ON, the overlay
 follows whatever file is current. Added lines get a green `+` in the sign
-column over a subtle yellow background on the added text; removed lines appear
+column over a subtle yellow background across the full line width; removed lines appear
 as red `-` virtual lines over a subtle red background at the position they were
 removed, so the buffer reads like an inline `git diff`. The diff runs against
 the *live buffer contents* (unsaved edits included, via `vim.diff` against
