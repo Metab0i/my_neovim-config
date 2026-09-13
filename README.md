@@ -382,4 +382,52 @@ lua/ui/winbar.lua          - winbar (modified flag + full path)
 lua/ui/context.lua         - sticky current-scope header (pinned scope line while scrolling)
 lua/ui/statusline.lua      - statusline (diagnostics + LSP + percentage)
 pack/mason/start/*         - mason.nvim, mason-lspconfig.nvim, nvim-lspconfig (git submodules)
+tests/                     - headless test suite + runner + fixtures (see Testing)
 ```
+
+## Testing
+
+The config ships a headless test suite under `tests/`. Each test runs against a
+fresh, isolated temp HOME (normal XDG discovery — the config dir is symlinked
+into `$TMPHOME/.config/nvim`, so `require()` and the runtime path work), then
+asserts on the resulting nvim state. `run.sh` is self-sufficient: its only
+requirements are `nvim` and `timeout` (coreutils) on `PATH`.
+
+### Run
+
+```bash
+tests/run.sh                 # run every test file
+tests/run.sh tests/test_gitdiff.lua   # run a single file
+```
+
+`run.sh` builds throwaway fixtures (a git repo with known `HEAD` content for the
+`:GitDiff` tests, plus a non-git dir) into a fresh temp dir **per test file**,
+so no test depends on another's mutations, then aggregates a PASS/FAIL summary
+and exits non-zero if any test fails.
+
+Override the per-test timeout (default 30s) with `TIMEOUT`:
+
+```bash
+TIMEOUT=60 tests/run.sh
+```
+
+### What's covered
+
+- `scope_engine`, `ui/context` (sticky-scope header: ancestor chain, dedup,
+  trim, scrolloff, highlight defaults/fallback).
+- `gitdiff` (`:GitDiff` overlay: add/remove marks, live recompute, toggle,
+  untracked/non-git, glob-magic filenames, tint groups).
+- `navhistory`, `execution_panel/scopes` (fold commands).
+- `execution_panel/discovery`, `findfile`, `findstring`, `replace`.
+- `peek`, `notice`, `autocomplete`, `lsp`, `navigation`, `mason`,
+  `ui/winbar`, `ui/statusline`.
+
+### Headless limitations
+
+`--headless` nvim has no real terminal UI, so tests assert **API state**, not
+pixels: float placement and configured borders (`nvim_win_get_config`), viewport
+topline, extmark existence, buffer/window/option state. Pixel-level rendering of
+`virt_lines`, `winhighlight` colors, and true cursor colors is not observable
+headlessly and is left to interactive verification. The full autocomplete LSP
+round-trip (trigger → request → ghost-line → accept) also needs a live server
+plus insert mode and is a manual-verification gap.
