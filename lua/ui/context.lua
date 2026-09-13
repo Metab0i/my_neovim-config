@@ -12,15 +12,17 @@
 -- mechanism nvim-treesitter-context uses -- because extmarks with virt_lines
 -- are buffer-scoped and would ghost into every split showing the same file.
 --
--- Tradeoff: the header overlays the topmost visible buffer lines. Two rules
--- keep the cursor visible:
---   * the config sets `scrolloff = 1` (core/navigation.lua), so scrolling
---     normally leaves at least one context line above the cursor;
---   * dynamic trim caps the header height to the cursor's screen row
---     (winline() - 1, wrap/fold aware), so even when scrolloff cannot apply
---     (tiny windows, :normal! scrolls) the header shrinks to fit above the
---     cursor instead of covering it. When trimmed, the innermost (most
---     specific) scopes are kept; at most MAX_LINES lines are shown.
+-- Tradeoff: the header overlays the topmost visible buffer lines. Instead of
+-- trimming the header to the rows physically above the cursor, the reservation
+-- is enforced through the window-local `scrolloff`: it is set to the number of
+-- pinned scopes, so Neovim keeps the cursor that many screen rows below the top
+-- -- exactly enough room for the whole header. scrolloff counts screen lines and
+-- the header is one screen row per scope, so the mapping is exact; the window
+-- text height minus one (for the cursor) caps it in tiny windows. (The former
+-- winline()-1 trim was removed: setting scrolloff applies lazily on the next
+-- cursor move, so a same-pass winline() reading is stale and collapsed the
+-- header to the innermost scope alone during upward scroll.) At most MAX_LINES
+-- lines are shown; when capped, the innermost (most specific) scopes are kept.
 
 local scope = require("core.scope_engine")
 
@@ -86,6 +88,11 @@ local function close_float(win)
     vim.api.nvim_buf_delete(wc.bufnr, { force = true })
   end
   window_contexts[win] = nil
+  -- drop the window-local scrolloff reservation so the window follows the
+  -- global default again (guarded: the host may already be invalid on WinClosed)
+  if vim.api.nvim_win_is_valid(win) then
+    vim.wo[win].scrolloff = -1
+  end
 end
 
 local function close_all()
@@ -214,13 +221,24 @@ local function recompute(win)
   local col = info.textoff or 0
   local width = math.max(1, (info.width or vim.api.nvim_win_get_width(win)) - col)
 
-  -- dynamic trim: the cursor's 0-based screen row is the number of rows above
-  -- it. winline() takes no args, so call it in the target window's context; it
-  -- returns the cursor's 1-based screen line accounting for 'wrap' and folds
-  -- (unlike a plain cur - topline).
-  local avail = vim.api.nvim_win_call(win, function() return vim.fn.winline() end) - 1
-  local n = math.min(#out, math.max(0, avail), MAX_LINES)
-  if n == 0 then close_float(win) return end
+  -- reserve screen space for the header via the window-local scrolloff: one
+  -- screen row per pinned scope, capped at MAX_LINES and the window text height
+  -- minus one row for the cursor. scrolloff counts screen lines and the header
+  -- is one screen row per scope, so the reservation matches the header exactly.
+  -- (The former winline()-1 trim was removed: setting scrolloff applies lazily
+  -- on the next cursor move, so a same-pass winline() reading is stale and
+  -- collapsed the header to the innermost scope alone during upward scroll.)
+  -- getwininfo().height is the window TEXT height (excludes the winbar);
+  -- nvim_win_get_height includes it, so strip the winbar row in the fallback.
+  local winh = info.height
+    or (vim.api.nvim_win_get_height(win) - ((vim.wo[win].winbar or "") ~= "" and 1 or 0))
+  local want = math.min(#out, MAX_LINES, math.max(0, winh - 1))
+  if want == 0 then close_float(win) return end
+  -- compare the raw window-local: vim.wo[] resolves a cleared (-1) value to the
+  -- global, which cannot tell us whether this window already owns a reservation
+  local cur_so = vim.api.nvim_get_option_value("scrolloff", { win = win, scope = "local" })
+  if cur_so ~= want then vim.wo[win].scrolloff = want end
+  local n = want
 
   -- keep the INNERMOST n scopes when trimmed (most specific / immediately
   -- relevant), still rendered outermost-first within the kept subset, each

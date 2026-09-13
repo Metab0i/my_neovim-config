@@ -96,12 +96,15 @@ remains defined in case you want to underline the last header line yourself.
 The winbar (`ui/winbar.lua`) is unchanged - this header lives inside the
 viewport.
 
-The header overlays the topmost visible lines and never covers the cursor: its
-height is dynamically capped to the number of screen rows above the cursor
-(wrap/fold aware), capped at 6 lines, and when it must shrink the innermost
-(most specific) scopes are kept. The config's `scrolloff = 1` normally keeps a
-context line above the cursor anyway, so the cursor is never hidden behind the
-header.
+The header overlays the topmost visible lines and never persistently covers the
+cursor: it reserves screen space by setting the window-local `scrolloff` to the
+number of pinned scopes (one per scope, capped at `MAX_LINES` = 6 and at the
+window height minus one row for the cursor). Because `scrolloff` counts screen
+lines and the header is one screen row per scope, the reservation matches the
+header exactly, so the cursor stays below the whole chain while scrolling up and
+is released one row at a time as each opener scrolls back into view. The
+window-local override is cleared (falls back to the global `scrolloff = 1`) when
+the header hides, and the innermost (most specific) scopes are kept when capped.
 
 ### Git Diff
 
@@ -217,7 +220,7 @@ no LSP server is attached / definition not found / file unreadable, and by
 |--------------|-------------------------------------|--------------------------
 | Line numbers | Absolute + relative                 | `core/navigation.lua`
 | Cursorline   | Number-only highlight               | `core/navigation.lua`
-| Scrolloff    | 1 (keeps the cursor off the row the sticky-scope header overlays) | `core/navigation.lua`
+| Scrolloff    | 1 (global fallback; the sticky-scope header sets a window-local value = pinned scope count) | `core/navigation.lua`, `ui/context.lua`
 | Shift width  | 2 spaces                            | `core/navigation.lua`
 | Clipboard    | Sync with system (`unnamed`)        | `core/navigation.lua`
 | Leader       | `<Space>`                           | `core/navigation.lua`
@@ -414,7 +417,7 @@ TIMEOUT=60 tests/run.sh
 ### What's covered
 
 - `scope_engine`, `ui/context` (sticky-scope header: ancestor chain, dedup,
-  trim, scrolloff, highlight defaults/fallback).
+  scrolloff reservation + settle/no-op, highlight defaults/fallback).
 - `gitdiff` (`:GitDiff` overlay: add/remove marks, live recompute, toggle,
   untracked/non-git, glob-magic filenames, tint groups).
 - `navhistory`, `execution_panel/scopes` (fold commands).

@@ -51,7 +51,7 @@ end
 if steps >= 200 then fail("k loop never reached file top"); return end
 
 -- 4. control: with scrolloff=0 the cursor CAN reach w0 (proves scrolloff does the work)
-vim.o.scrolloff = 0
+vim.wo[w0].scrolloff = 0
 vim.cmd("normal! 40G")
 for _ = 1, 60 do
   vim.cmd("normal! k")
@@ -59,9 +59,9 @@ for _ = 1, 60 do
 end
 if vim.fn.line(".") ~= vim.fn.line("w0") then
   fail("control run failed: expected cursor on w0 with scrolloff=0")
-  vim.o.scrolloff = 1
+  vim.wo[w0].scrolloff = 1
   return
 end
-vim.o.scrolloff = 1
+vim.wo[w0].scrolloff = 1
 
 pass()
