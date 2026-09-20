@@ -31,7 +31,7 @@ check(lum(delhl.bg) > lum(delbg.bg),
   "GitDiffDelete accent segment bg should be brighter than the GitDiffDeleteBg line tint")
 
 -- b.txt HEAD x1,x2; add x3 -> an added line. Expect ONE extmark carrying the
--- bold green "+" accent (inline virtual text) AND the full-line-width tint via
+-- bold green "+" accent (overlay virtual text) AND the full-line-width tint via
 -- `line_hl_group` (line_hl_group fills the whole line incl. the empty space to
 -- the right).
 vim.cmd("edit " .. vim.fn.fnameescape(vim.env.TEST_FIXTURE_DIR .. "/b.txt"))
@@ -48,7 +48,7 @@ end
 check(add_mark ~= nil, "expected the inline + marker extmark")
 if add_mark then
   check(add_mark.virt_text[1][2] == "GitDiffAdd", "inline + should use the bold GitDiffAdd accent hl")
-  check(add_mark.virt_text_pos == "inline", "inline + should use virt_text_pos=inline")
+  check(add_mark.virt_text_pos == "overlay", "inline + should use virt_text_pos=overlay")
   check(add_mark.line_hl_group == "GitDiffAddBg",
     "inline + should carry line_hl_group=GitDiffAddBg (full-line tint), got " .. tostring(add_mark.line_hl_group))
   check(add_mark.priority == 200, "tint should have priority 200, got " .. tostring(add_mark.priority))

@@ -288,9 +288,11 @@ local function apply(bufnr)
       local row = math.max(buf_ln - 1, 0)
       if row <= line_count - 1 then
         -- One extmark carrying both the inline "+" marker and the full-line
-        -- background tint. `virt_text_pos = "inline"` inserts the glyph at
-        -- column 0 like real text (shifting the line content right), so it
-        -- reads as part of the line rather than the sign column.
+        -- background tint. `virt_text_pos = "overlay"` draws the glyph on top
+        -- of column 0 without inserting it as text, so the line content (and
+        -- the cursor) never shift; the first cell of the added line is covered
+        -- by the glyph, which stays legible via the bold brightened accent and
+        -- its own bg segment.
         -- `line_hl_group` fills the whole line - text and the empty space to
         -- its right - so the yellow tint spans the full line width. (A range
         -- with `end_col = -1` + `hl_eol = true` cannot do this: `hl_eol` only
@@ -299,7 +301,7 @@ local function apply(bufnr)
         -- too (line_hl_group fills the whole line, empty or not).
         pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, 0, {
           virt_text = { { "+", "GitDiffAdd" } },
-          virt_text_pos = "inline",
+          virt_text_pos = "overlay",
           line_hl_group = "GitDiffAddBg",
           priority = MARK_PRIORITY,
         })
