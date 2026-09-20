@@ -12,12 +12,16 @@ local function marks(bufnr)
   local plus, removed = {}, {}
   for _, m in ipairs(list) do
     local row, det = m[2], m[4]
-    if det.sign_text and det.sign_text:find("+") then
+    if det.virt_text and det.virt_text[1] and det.virt_text[1][1]:find("+") then
       plus[#plus + 1] = row
     end
     if det.virt_lines then
       local texts = {}
-      for _, line in ipairs(det.virt_lines) do texts[#texts + 1] = line[1][1] end
+      for _, line in ipairs(det.virt_lines) do
+        -- chunk 1 is the bold "-" accent, chunk 2 is the removed body text;
+        -- together they are the visible removed line.
+        texts[#texts + 1] = line[1][1] .. line[2][1]
+      end
       removed[#removed + 1] = { row = row, above = det.virt_lines_above, lines = texts }
     end
   end
@@ -57,7 +61,6 @@ local a_buf = curbuf()
 setbuf({ "l1", "l3X", "l4", "new", "l5" }) -- delete l2, modify l3, add "new"
 vim.cmd("GitDiff")
 check(gd._state() == true, "S1: toggle did not enable")
-check(vim.go.signcolumn == "yes", "S1: signcolumn not forced to yes")
 local plus, removed = marks(a_buf)
 check(eqrows(plus, { 1, 3 }), "S1: expected + signs on rows 1,3 got " .. vim.inspect(plus))
 check(#removed == 1, "S1: expected 1 removal run got " .. #removed)
@@ -82,7 +85,6 @@ vim.cmd("GitDiff")
 check(gd._state() == false, "S3: second toggle did not disable")
 plus, removed = marks(a_buf)
 check(#plus == 0 and #removed == 0, "S3: marks not cleared on disable")
-check(vim.go.signcolumn == "auto", "S3: signcolumn not restored, got " .. vim.go.signcolumn)
 
 -- --------------------------------------------- S4: global toggle follows files
 -- a.txt differs from HEAD again (S2b left it identical -> zero marks)

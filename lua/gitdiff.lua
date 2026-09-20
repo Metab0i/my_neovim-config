@@ -4,15 +4,15 @@
 -- A global on/off toggle. While ON, the current file is overlaid with
 -- extmarks computed from a diff of the LIVE buffer contents against the
 -- file's HEAD revision:
---   * added lines    -> green "+" in the sign column, over a subtle yellow
---     background tint across the full line width
---   * removed lines  -> red "-" virtual lines over a subtle red background
---     tint, rendered at the position the line was removed, so the buffer
---     reads like an inline `git diff`
+--   * added lines    -> a bright-green "+" rendered inline at the start of the
+--     line, over a subtle yellow background tint across the full line width
+--   * removed lines  -> a bright-red "-" rendered inline at the start of the
+--     removed text, shown as red virtual lines over a subtle red background
+--     tint at the position the line was removed, so the buffer reads like an
+--     inline `git diff`
 -- The view follows whatever file is current (BufEnter/WinEnter) and
 -- recomputes on a short debounce after every text change, so edits are
--- integrated live. `:GitDiff` again clears everything and restores
--- 'signcolumn'.
+-- integrated live. `:GitDiff` again clears everything.
 --
 -- Design notes:
 --   * The diff runs in pure Lua (vim.diff, buffer content vs cached HEAD
@@ -25,11 +25,14 @@
 --     branch switches are picked up. Fetches happen only on enable or after
 --     a focus change - never on the text-change hot path. BufWritePost is
 --     deliberately NOT a trigger: writing does not move HEAD.
---   * Removals cannot be signs (the line no longer exists), so they must be
---     virt_lines; additions have no such problem (the line exists), so a
---     sign "+" is the least intrusive marker - it never shifts the text.
---     'signcolumn' is forced to "yes" while ON so signs appearing and
---     disappearing mid-typing never reflow the window.
+--   * The +/- markers are rendered inline (virtual text) instead of in the
+--     sign column, so each marker sits on the exact line it describes: the "+"
+--     at the start of an added line, the "-" as the first chunk of the removed
+--     line's virtual text. This avoids the anchor ambiguity of gutter signs (a
+--     removed line has no buffer row to attach to) and sign-column collisions
+--     on replacements. Highlight colour is the primary cue, with the marker
+--     glyph bold and brightened over the subtle line tint. No 'signcolumn'
+--     forcing is needed.
 
 local M = {}
 
@@ -40,11 +43,13 @@ local repo_failed = {}  -- [bufnr] = true: git lookups for this buffer already f
 local marked = {}       -- [bufnr] = true: this buffer has (or had) the overlay applied
 local pending = {}      -- [bufnr] = true while a debounced recompute is queued
 local timer = nil       -- single debounce timer (vim.defer_fn handle)
-local saved_signcolumn = nil
 
 local DEBOUNCE_MS = 40
 -- Below the autocomplete ghost line (priority 100) on the same row.
 local VLINE_PRIORITY = 40
+-- Priority for the inline "+" marker's extmark (full-line tint + glyph): above
+-- the ghost line's 100 and above VLINE_PRIORITY, so the tint wins.
+local MARK_PRIORITY = 200
 -- Padding width for removed-line virtual text: each virt_line is padded with
 -- spaces to this display width so the tint spans the full line width. 300
 -- comfortably exceeds any real window width; virt_lines default to `trunc`
@@ -53,35 +58,82 @@ local VIRT_LINE_WIDTH = 300
 
 ------------------------------------------------------------- highlight
 
--- Green "+" / red "-". Derived from the theme's DiffAdd/DiffDelete colors
--- when the theme defines them (falling back to a readable green/red), so
--- the markers sit in the theme's diff palette. Re-derived on ColorScheme;
+-- The section tint backgrounds: yellow behind added lines, red behind removed
+-- lines. Shared with the accent segments so nothing can drift apart.
+local ADD_BG = "#6b5a00"
+local DEL_BG = "#6a1a1a"
+
+-- How far to blend the +/- glyph toward white (so it reads brighter than the
+-- tint around it), and how much brighter the glyph's own background segment is
+-- than the rest of the tinted line.
+local ACCENT_BRIGHTEN = 0.45
+local ACCENT_BG_BRIGHTEN = 0.25
+
+-- [group] = the fg we last wrote, so a value already in place can be told apart
+-- from a genuine user override (avoids re-brightening without a `hi clear`).
+local hl_fg_set = {}
+
+-- Blend a colour toward white by `amount` (0..1). Accepts "#rrggbb" or a 24-bit
+-- integer; returns a 24-bit integer (or the input unchanged if unparseable).
+local function brighten(color, amount)
+  local n = color
+  if type(color) == "string" then n = tonumber((color:gsub("^#", "")), 16) end
+  if type(n) ~= "number" then return color end
+  local r = math.floor(n / 0x10000) % 0x100
+  local g = math.floor(n / 0x100) % 0x100
+  local b = n % 0x100
+  local function up(c) return math.floor(c + (255 - c) * amount + 0.5) end
+  return up(r) * 0x10000 + up(g) * 0x100 + up(b)
+end
+
+-- GitDiffAdd / GitDiffDelete are the bold inline "+" / "-" marker accents. Each
+-- is a brightened copy of the theme's DiffAdd/DiffDelete colour (falling back
+-- to a readable green/red), so the marker stays in the theme's diff palette but
+-- stands out brighter than the tint behind it. Re-derived on ColorScheme;
 -- `default = true` keeps any user `:highlight` definition in charge.
 local function apply_hl_defaults()
-  local function derive(name, fallback)
-    local attrs = { default = true }
+  local function theme_fg(name, fallback)
+    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
+    if ok and type(hl) == "table" then return hl.fg or hl.bg or fallback end
+    return fallback
+  end
+  -- A user's own definition of the public GitDiff* groups wins over the theme.
+  -- A value we wrote ourselves is ignored, so re-running without `hi clear`
+  -- (a bare `:doautocmd ColorScheme`, rather than `:colorscheme`) cannot
+  -- brighten the accent repeatedly.
+  local function user_fg(name)
     local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
     if ok and type(hl) == "table" then
-      attrs.fg = hl.fg or hl.bg or fallback
-    else
-      attrs.fg = fallback
+      local fg = hl.fg or hl.bg
+      if fg ~= nil and fg ~= hl_fg_set[name] then return fg end
     end
-    return attrs
   end
-  pcall(vim.api.nvim_set_hl, 0, "GitDiffAdd", derive("DiffAdd", "#50FA7B"))
-  pcall(vim.api.nvim_set_hl, 0, "GitDiffDelete", derive("DiffDelete", "#FF5555"))
+
+  -- Each accent gets its own slightly-brighter background segment behind the
+  -- glyph: the "+" overrides its line tint for that one cell, and the "-" is
+  -- the first chunk of a virtual line (which has no `line_hl_group`). The
+  -- removed body text keeps the raw red, so only the accent segment is brighter.
+  local add_fg = user_fg("GitDiffAdd") or theme_fg("DiffAdd", "#50FA7B")
+  local add_accent = brighten(add_fg, ACCENT_BRIGHTEN)
+  pcall(vim.api.nvim_set_hl, 0, "GitDiffAdd",
+    { default = true, fg = add_accent, bold = true, bg = brighten(ADD_BG, ACCENT_BG_BRIGHTEN) })
+  hl_fg_set["GitDiffAdd"] = add_accent
+
+  local del_fg = user_fg("GitDiffDelete") or theme_fg("DiffDelete", "#FF5555")
+  local del_accent = brighten(del_fg, ACCENT_BRIGHTEN)
+  pcall(vim.api.nvim_set_hl, 0, "GitDiffDelete",
+    { default = true, fg = del_accent, bold = true, bg = brighten(DEL_BG, ACCENT_BG_BRIGHTEN) })
+  hl_fg_set["GitDiffDelete"] = del_accent
+
   -- Subtle-but-visible background tints for the changed sections: yellow
   -- behind added lines, red behind removed virtual lines. Fixed colors tuned
   -- for a dark background; bright enough to be clearly perceptible on their
   -- own (additions have no foreground change, so the yellow tint must carry
   -- the visual cue - the earlier #4a4a1a was too dark to notice).
-  pcall(vim.api.nvim_set_hl, 0, "GitDiffAddBg", { default = true, bg = "#6b5a00" })
-  -- The red `-` text keeps the marker fg (derived from the resolved
-  -- GitDiffDelete, so a user override survives) while gaining the tint bg.
-  local del = { default = true, fg = "#FF5555", bg = "#6a1a1a" }
-  local okd, dhl = pcall(vim.api.nvim_get_hl, 0, { name = "GitDiffDelete", link = false })
-  if okd and type(dhl) == "table" and dhl.fg then del.fg = dhl.fg end
-  pcall(vim.api.nvim_set_hl, 0, "GitDiffDeleteBg", del)
+  pcall(vim.api.nvim_set_hl, 0, "GitDiffAddBg", { default = true, bg = ADD_BG })
+  -- The removed body text keeps the raw red fg on the tint bg, so the
+  -- brightened "-" accent reads brighter than the text it introduces.
+  pcall(vim.api.nvim_set_hl, 0, "GitDiffDeleteBg", { default = true, fg = del_fg, bg = DEL_BG })
 end
 apply_hl_defaults()
 
@@ -174,8 +226,8 @@ local function to_diff_text(lines)
 end
 
 -- Recompute the overlay for one buffer: clear our namespace, diff the live
--- buffer lines against the cached HEAD lines, and place `+` signs / `-`
--- virtual lines per hunk.
+-- buffer lines against the cached HEAD lines, and place inline `+` markers on
+-- added lines / `-` virtual lines for removed lines, per hunk.
 local function apply(bufnr)
   if not enabled then return end
   if not vim.api.nvim_buf_is_valid(bufnr) then return end
@@ -209,6 +261,7 @@ local function apply(bufnr)
   local function flush()
     if not run then return end
     if #run.chunks > 0 then
+      -- The removed lines as red virtual lines above/below the anchor row.
       pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, run.row, 0, {
         virt_lines = run.chunks,
         virt_lines_above = run.above,
@@ -234,21 +287,21 @@ local function apply(bufnr)
       flush()
       local row = math.max(buf_ln - 1, 0)
       if row <= line_count - 1 then
-        -- Single sign extmark carrying both the "+" marker and the full-line
-        -- background tint via `line_hl_group` (the same mechanism gitsigns
-        -- uses for its `linehl` highlights). `line_hl_group` fills the whole
-        -- line - text and the empty space to its right - so the yellow tint
-        -- spans the full line width. (A range with `end_col = -1` +
-        -- `hl_eol = true` cannot do this: `hl_eol` only applies to multiline
-        -- ranges, so it is silently ignored on a single-line extmark.)
-        -- A side effect: empty added lines are now tinted too (line_hl_group
-        -- fills the whole line, empty or not) - a deliberate change from the
-        -- old text-only range, which left them untinted.
+        -- One extmark carrying both the inline "+" marker and the full-line
+        -- background tint. `virt_text_pos = "inline"` inserts the glyph at
+        -- column 0 like real text (shifting the line content right), so it
+        -- reads as part of the line rather than the sign column.
+        -- `line_hl_group` fills the whole line - text and the empty space to
+        -- its right - so the yellow tint spans the full line width. (A range
+        -- with `end_col = -1` + `hl_eol = true` cannot do this: `hl_eol` only
+        -- applies to multiline ranges, so it is silently ignored on a
+        -- single-line extmark.) A side effect: empty added lines are tinted
+        -- too (line_hl_group fills the whole line, empty or not).
         pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, 0, {
-          sign_text = "+",
-          sign_hl_group = "GitDiffAdd",
+          virt_text = { { "+", "GitDiffAdd" } },
+          virt_text_pos = "inline",
           line_hl_group = "GitDiffAddBg",
-          priority = 200,
+          priority = MARK_PRIORITY,
         })
       end
       buf_ln = buf_ln + 1
@@ -286,14 +339,17 @@ local function apply(bufnr)
         flush()
         run = { row = row, above = above, chunks = {} }
       end
-      local vtext = "-" .. line:sub(2)
+      local vtext = line:sub(2)
       run.chunks[#run.chunks + 1] = {
+        -- Bold red "-" accent, carrying the tint bg so it flows into the body.
+        { "-", "GitDiffDelete" },
         { vtext, "GitDiffDeleteBg" },
         -- Pad with spaces (same hl group) so the red tint spans the full line
         -- width. virt_lines have no built-in full-width option; the trailing
         -- whitespace chunk carries the tint to the window edge (clipped by
-        -- `trunc` overflow). `strdisplaywidth` so multibyte lines pad right.
-        { string.rep(" ", math.max(VIRT_LINE_WIDTH - vim.fn.strdisplaywidth(vtext), 0)), "GitDiffDeleteBg" },
+        -- `trunc` overflow). `strdisplaywidth` so multibyte lines pad right;
+        -- "-" is one cell, hence the extra column in the width.
+        { string.rep(" ", math.max(VIRT_LINE_WIDTH - vim.fn.strdisplaywidth("-" .. vtext), 0)), "GitDiffDeleteBg" },
       }
     end
     -- "\" ("\ No newline at end of file") and empty lines: nothing to place
@@ -323,10 +379,6 @@ local function disable()
     timer:close()
     timer = nil
   end
-  if saved_signcolumn ~= nil then
-    vim.go.signcolumn = saved_signcolumn
-    saved_signcolumn = nil
-  end
 end
 
 function M.toggle()
@@ -347,8 +399,6 @@ function M.toggle()
   -- "no file" (e.g. [No Name]) still enables: the view follows the next
   -- real file that is entered.
   enabled = true
-  saved_signcolumn = vim.go.signcolumn
-  vim.go.signcolumn = "yes"
   apply(bufnr)
 end
 

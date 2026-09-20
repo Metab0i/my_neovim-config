@@ -6,7 +6,7 @@ local function check(c, m) if not c then failures[#failures + 1] = m end end
 local function plus_rows(buf)
   local rows = {}
   for _, mm in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
-    if mm[4].sign_text and mm[4].sign_text:find("+") then rows[#rows + 1] = mm[2] end
+    if mm[4].virt_text and mm[4].virt_text[1] and mm[4].virt_text[1][1]:find("+") then rows[#rows + 1] = mm[2] end
   end
   table.sort(rows)
   return rows

@@ -40,19 +40,22 @@ vim.cmd("edit! " .. vim.fn.fnameescape(vim.env.TEST_FIXTURE_DIR .. "/a.txt"))
 buf = vim.api.nvim_get_current_buf()
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "l1", "l2", "l3" })
 vim.cmd("GitDiff")
-local pad_ok, text_chunk, pad_chunk = false, nil, nil
+local pad_ok, accent_chunk, text_chunk, pad_chunk = false, nil, nil, nil
 for _, mm in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
   local d = mm[4]
   if d.virt_lines then
     pad_ok = true
     local line_chunks = d.virt_lines[1]
     if line_chunks then
-      text_chunk = line_chunks[1]
-      pad_chunk = line_chunks[2]
+      accent_chunk = line_chunks[1]
+      text_chunk = line_chunks[2]
+      pad_chunk = line_chunks[3]
     end
   end
 end
 check(pad_ok, "expected removed-line virt_lines with a full-width pad chunk")
+check(accent_chunk and accent_chunk[1] == "-" and accent_chunk[2] == "GitDiffDelete",
+  "virt_line accent chunk should be the bold \"-\" with GitDiffDelete")
 check(text_chunk and text_chunk[2] == "GitDiffDeleteBg", "virt_line text chunk should use GitDiffDeleteBg")
 check(pad_chunk and pad_chunk[2] == "GitDiffDeleteBg", "virt_line pad chunk should use GitDiffDeleteBg")
 vim.cmd("GitDiff")

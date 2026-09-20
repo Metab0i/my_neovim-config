@@ -114,22 +114,23 @@ the header hides, and the innermost (most specific) scopes are kept when capped.
 
 No keymap (Neovim requires uppercase-initial user command names; `<leader>gd` is
 taken by go-to-definition). A global on/off toggle - while ON, the overlay
-follows whatever file is current. Added lines get a green `+` in the sign
-column over a subtle yellow background across the full line width; removed lines appear
-as red `-` virtual lines over a subtle red background at the position they were
+follows whatever file is current. Added lines get a bright green `+` rendered
+inline at the start of the line over a subtle yellow background across the full
+line width; removed lines appear as red virtual lines (with a bright red `-`
+accent at the start) over a subtle red background at the position they were
 removed, so the buffer reads like an inline `git diff`. The diff runs against
 the *live buffer contents* (unsaved edits included, via `vim.diff` against
 cached HEAD content) and recomputes on a short debounce after every change, so
-edits integrate fluidly. Toggling off clears the overlay and restores
-`signcolumn` (forced to `yes` while ON so signs never reflow the text).
+edits integrate fluidly. Toggling off clears the overlay.
 
 Untracked or staged-but-uncommitted files show every line as added; files
 outside a git repo get a notification and the toggle stays off (the view then
 follows the next real file). The HEAD base is refetched on `FocusGained`, so a
 commit or branch switch made elsewhere is picked up when you return to nvim.
-Styling: `GitDiffAdd` / `GitDiffDelete` highlight groups, derived from the
-theme's `DiffAdd` / `DiffDelete` colors with a green/red fallback, plus
-`GitDiffAddBg` / `GitDiffDeleteBg` for the subtle yellow/red section tints.
+Styling: `GitDiffAdd` / `GitDiffDelete` are the bold inline `+` / `-` marker
+accents, derived from the theme's `DiffAdd` / `DiffDelete` colors with a
+green/red fallback; each sits on a slightly brighter background segment than the
+`GitDiffAddBg` / `GitDiffDeleteBg` yellow/red section tints.
 
 ### Execution Panel
 
