@@ -66,9 +66,8 @@ M._state = function() return state end
 
 local function define_hl()
   if state.ns == nil then state.ns = vim.api.nvim_create_namespace("ExecPanel") end
-  local base = vim.api.nvim_get_hl(0, { name = "Search" })
-  local merged = vim.tbl_deep_extend("force", base, { strikethrough = true })
-  pcall(vim.api.nvim_set_hl, 0, "ExecPanelMatch", merged)
+  -- Match = plain Search highlight, no strikethrough.
+  pcall(vim.api.nvim_set_hl, 0, "ExecPanelMatch", vim.api.nvim_get_hl(0, { name = "Search" }))
 end
 
 ------------------------------------------------------------------ dropdown
